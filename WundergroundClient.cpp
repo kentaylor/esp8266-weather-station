@@ -140,6 +140,12 @@ void WundergroundClient::value(String value) {
   if (currentKey == "precip_today_in" && !isMetric) {
     precipitationToday = value + "in";
   }
+  if (currentKey == "precip_1hr_metric" && isMetric) {
+      precipitation1Hour = value + "mm";
+    }
+    if (currentKey == "precip_1hr_in" && !isMetric) {
+      precipitation1Hour = value + "in";
+  }
   if (currentKey == "period") {
     currentForecastPeriod = value.toInt();
   }
@@ -252,6 +258,10 @@ String WundergroundClient::getPressure() {
 
 String WundergroundClient::getPrecipitationToday() {
   return precipitationToday;
+}
+
+String WundergroundClient::getPrecipitation1Hour() {
+  return precipitation1Hour;
 }
 
 String WundergroundClient::getTodayIcon() {

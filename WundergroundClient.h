@@ -45,6 +45,7 @@ class WundergroundClient: public JsonListener {
     String humidity;
     String pressure;
     String precipitationToday;
+    String precipitation1Hour;
     void doUpdate(String url);
 
     // forecast
@@ -79,6 +80,8 @@ class WundergroundClient: public JsonListener {
     String getPressure();
 
     String getPrecipitationToday();
+
+    String getPrecipitation1Hour();
 
     String getForecastIcon(int period);
 
