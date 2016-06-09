@@ -128,7 +128,7 @@ ThingspeakClient thingspeak;
 
 // ThingSpeak Settings
 char thingSpeakAddress[] = "api.thingspeak.com";
-String writeAPIKey = "ASVV1WV5VGYM1IQM"; //Yours
+String writeAPIKey = ""; //Yours
 const int updateThingSpeakInterval = 120 * 1000;      // Time interval in milliseconds to update ThingSpeak (number of seconds * 1000 = interval)
 // Variable Setup
 long lastConnectionTime = -10000000; 
@@ -201,13 +201,50 @@ void setup() {
   //Wait for WiFi to get connected
   int counter = 0;
    unsigned long startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(WiFi.status());
+  while (int status = WiFi.status() != WL_CONNECTED) {
+    Serial.print(status);
     Serial.print(" . ");
-    Serial.println(counter);
+    Serial.println(counter); 
     delay(500);
     display.clear();
-    display.drawString(64, 10, "Connecting to WiFi");
+    switch (status)
+   {
+      // WL_NO_SHIELD 255
+       //WL_SCAN_COMPLETED 2
+       //WL_CONNECTION_LOST 5
+      case WL_IDLE_STATUS: { //0
+        display.drawString(64, 10, "Device WiFi Failed");
+        break;
+      }
+      case WL_NO_SSID_AVAIL: { // 1
+        display.drawString(64, 10, "Connecting to WiFi");
+        String text = WiFi.SSID();
+        if (counter>60) {
+          display.drawString(64, 40,text);
+          display.drawString(64, 54, "Push button to configure");
+        }
+        else {
+          display.drawString(64, 45,text);
+        }
+        break;
+        }
+      case WL_DISCONNECTED: {  // 6
+        display.drawString(64, 10, "Connecting to WiFi");
+        String text = WiFi.SSID();
+        text = text + " not visible";
+        display.drawString(64, 40,text);
+        display.drawString(64, 54, "Push button to configure WiFi");
+        break;
+      }     
+      case WL_CONNECTED: break; // 3
+      case WL_CONNECT_FAILED: { //4
+        display.drawString(64, 10, "Connecting to WiFi");
+        display.drawString(64, 40, "Connect failed. Push button ");
+        display.drawString(64, 54, "to configure WiFi");
+        break;
+      }
+      default: display.drawString(64, 10, "Connecting to WiFi");
+    }   
     display.drawXbm(46, 30, 8, 8, counter % 3 == 0 ? activeSymbole : inactiveSymbole);
     display.drawXbm(60, 30, 8, 8, counter % 3 == 1 ? activeSymbole : inactiveSymbole);
     display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
@@ -264,7 +301,9 @@ void loop() {
      display.drawString(64, 5, "WiFi Configuration mode");
      display.drawString(64, 20, "Go to http://192.168.1.4");
      display.drawString(64, 35, "after connecting computer");
-     display.drawString(64, 50, "to ESP Wifi Network");
+     String text = "ESP" + String(ESP.getChipId());
+     text = "to " + text + " Wifi Network";
+     display.drawString(64, 50, text);
      
      display.display();
      WiFiManager wifiManager;
