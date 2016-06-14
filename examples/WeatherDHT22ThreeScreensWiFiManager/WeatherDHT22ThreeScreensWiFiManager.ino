@@ -56,8 +56,8 @@ bool initialConfig = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
 #define DHTPIN D2     // what digital pin we're connected to
-// GPIO pin which DS18B20 is plugged into. Port 5 on the NodeMCU is pin D1
-#define ONE_WIRE_BUS 5
+// GPIO pin which DS18B20 is plugged into. Port 5 on the NodeMCU is pin D1 but this needs an external pullup resistor
+#define ONE_WIRE_BUS D4 // Wemos and NodeMCU has a 10K pullup on D4 which removes need for an additional pullup resistor
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
 
@@ -81,7 +81,7 @@ const int UPDATE_INTERVAL_SECS = 10 * 60; // Update every 10 minutes
 // Display Settings
 const int I2C_DISPLAY_ADDRESS = 0x3c;
 const int SDA_PIN = D3;
-const int SDC_PIN = D4;
+const int SDC_PIN = D5; 
 
 // TimeClient settings
 const float UTC_OFFSET = 10;
@@ -131,7 +131,7 @@ char thingSpeakAddress[] = "api.thingspeak.com";
 String writeAPIKey = ""; //Yours
 const int updateThingSpeakInterval = 120 * 1000;      // Time interval in milliseconds to update ThingSpeak (number of seconds * 1000 = interval)
 // Variable Setup
-long lastConnectionTime = -10000000; 
+long lastConnectionTime = millis(); //First upload to thingspeeak will be sampling interval after bootup.
 int failedCounter = 0;
 
 // this array keeps function pointers to all frames
@@ -144,11 +144,12 @@ bool readyForWeatherUpdate = false;
 
 String lastUpdate = "--";
 String localTemperature = "";
-String localHumidity = "";
-String DS18B20Temperature = "";
-unsigned long SensorReadTime = 50000;
-float humidity = NAN;  
-float temperature = NAN; 
+String localHumidity = "nan";
+String DS18B20Temperature = "nan";
+unsigned long SensorReadTime = millis()-3000; //Doe the first read 3 seconds after startup
+float humidity = NAN;
+int misreads = 0; //counter for consecutive DHT22 misreads 
+float temperatureDHT = NAN; 
 float temperatureDS18b20 = NAN;
 
 Ticker ticker;
@@ -331,39 +332,47 @@ void loop() {
     Serial.println("update display");   
   }
   int remainingTimeBudget = ui.update(); 
-    //If less than remaining time budget which is a few milliseconds then animations will be smooth.
-   //if ( remainingTimeBudget>0 ) {
+  //If less than remaining time budget which is a few milliseconds then animations will be smooth.
+  //if ( remainingTimeBudget>0 ) {
     // You can do some work here
     // Don't do stuff if you are below your
-    // time budget.}
+  // time budget and you want smooth animation.}
   unsigned long TimeInterval = abs( millis() - SensorReadTime);
-  if (TimeInterval>15000 ) {
+  if (TimeInterval>15000 ) { //read sensors every 15 seconds
     SensorReadTime = millis();
     humidity = dht.readHumidity();  
-    temperature = dht.readTemperature(); 
+    temperatureDHT = dht.readTemperature(); 
     float temp = sensors.getTempCByIndex(0);
     if (temp != 85.0) temperatureDS18b20 = temp; //Read 85 at start up. If starting up keep previous temperature 
-    Serial.print("temperature = ");
-    Serial.print(temperature);
+    sensors.requestTemperatures(); //initiate ds18B20 sampling which takes about 2 seconds to complete
+    Serial.print("DHTtemperature = ");
+    Serial.print(temperatureDHT);
     Serial.print("  DS18B20temperature = ");
     Serial.print(temp);
     Serial.print("  humidity = ");
-    Serial.println(humidity);
-    }
-  if ((humidity>0) && (temperature>-100)&& (temperatureDS18b20>-100)) { //Checking readings were real i.e. not ISNAN
-    sensors.requestTemperatures(); //initiate ds18B20 read
-    if ( millis()-lastConnectionTime>updateThingSpeakInterval ) {
+    Serial.println(humidity); 
+    String tt(temperatureDHT, 1);    
+    String DS18B20(temperatureDS18b20, 1);   
+    localTemperature = tt;    
+    DS18B20Temperature = DS18B20;
+    if (( millis()-lastConnectionTime>updateThingSpeakInterval) && (humidity>0) && (temperatureDHT>-100) && (temperatureDS18b20>-100)) { //Checking readings were real i.e. not ISNAN
       Serial.println("upload temperature/humidity to thingspeak");
-      String tt(temperature, 1);
       String hh(humidity, 1);
-      String DS18B20(temperatureDS18b20, 1);   
-      localTemperature = tt;
-      localHumidity = hh;
-      DS18B20Temperature = DS18B20;
+      localHumidity = hh; // upload resolution precision is 1 decimal place
       updateThingSpeak("field1="+localTemperature+"&field2="+localHumidity+"&field3="+DS18B20Temperature);  
     }  
-    localHumidity = String(humidity,0);
-  }
+    if (humidity>0) {
+      misreads = 0;
+      localHumidity = String(humidity,0); //display precision is integers only.
+    }
+    else if (misreads <11) {
+        misreads = misreads + 1; 
+        Serial.print("misreads = "); 
+        Serial.println(misreads);
+    }
+
+    if (misreads > 10) localHumidity = "nan";         
+  }   
   delay(500); // Make this less to get a sideways scrolling display, longer for a less precise screen update time
 }
 
@@ -423,7 +432,7 @@ bool drawFrame3(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->drawString(60 + x + textWidth, 5 + y + 8, "C");
 
    display->setFont(ArialMT_Plain_24);
-  text = localTemperature + "°";
+  text = DS18B20Temperature + "°";
   display->drawString(60 + x, 30 + y, text);
   textWidth = display->getStringWidth(text);
   display->setFont(ArialMT_Plain_16);
@@ -554,7 +563,7 @@ void updateThingSpeak(String tsData) {
         failedCounter++;
         Serial.println("Connection to ThingSpeak Failed ("+String(failedCounter, DEC)+")");   
         Serial.println();
-        lastConnectionTime = millis(); 
+        lastConnectionTime = millis(); //Don't try again until next scheduled upload
     }
 }
 
