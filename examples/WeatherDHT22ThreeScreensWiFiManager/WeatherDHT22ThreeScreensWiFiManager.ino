@@ -26,8 +26,10 @@ configuring the WiFi credentials in code and recompiling. WiFi credentials are
 entered using a web browser. You must use the version of WiFiManager from 
 https://github.com/kentaylor/WiFiManager.
 
-Add your own configuration parameters at each location labelled "Yours".
-The configuration parameters are obtained from Weather Underground and ThingSpeak.
+Add your own configuration parameters at each location labelled "Your secret" with values from the service providers. 
+The configuration parameters are obtained from Weather Underground and ThingSpeak. Add your own configuration 
+parameters at each location labelled "Yours" to match your location. Parameters labelled as "hardware dependant" vary 
+according to how your wiring is configured. Parameters labelled as "configurable" can be varied to change device behaviour.
 */
 #include "DHT.h" //https://github.com/adafruit/DHT-sensor-library 
 #include <ESP8266WiFi.h>
@@ -44,18 +46,20 @@ The configuration parameters are obtained from Weather Underground and ThingSpea
 #include <OneWire.h> // Used for talking to DS18B20 temp sensor. 
 // Include the libraries needed for DS18B20 temperature measurement from https://github.com/milesburton/Arduino-Temperature-Control-Library
 #include <DallasTemperature.h> 
-#include <WiFiManager.h>          //https://github.com/kentaylor/WiFiManager
-
+#include <WiFiManager.h>          //https://github.com/kentaylor/WiFiManager Must be this version.
+#include <SFE_BMP180.h>  // https://github.com/kentaylor/BMP180_Breakout_Arduino_Library  Must be this version.
+/***************************
+ * Begin Settings
+ **************************/
 /*Trigger for inititating config mode is Pin D3 and also flash button on NodeMCU
  * Flash button is convenient to use but if it is pressed it will stuff up the serial port device driver 
  * until the computer is rebooted on windows machines.
  */
-const int TRIGGER_PIN = D0; // Wake up pin for deep sleep mode NodeMCU and WeMos.
-// Indicates whether ESP has WiFi credentials saved from previous session
-bool initialConfig = false;
+const int TRIGGER_PIN = D0; // Trigger for putting up a configuration portal. Wake up pin for deep sleep mode NodeMCU and WeMos. Hardware dependant.
+bool ConfigurationPortalRequired = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
-#define DHTPIN D2     // what digital pin we're connected to
+#define DHTPIN D2     // what digital pin we're connected to. Hardware dependant.
 // GPIO pin which DS18B20 is plugged into. Port 5 on the NodeMCU is pin D1 but this needs an external pullup resistor
 #define ONE_WIRE_BUS D4 // Wemos and NodeMCU has a 10K pullup on D4 which removes need for an additional pullup resistor
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
@@ -67,35 +71,31 @@ DallasTemperature sensors(&oneWire);
 // arrays to hold device address
 DeviceAddress Thermometer;
 
-
-/***************************
- * Begin Settings
- **************************/
-
 WiFiClient client;
 
 
 // Setup
-const int UPDATE_INTERVAL_SECS = 10 * 60; // Update every 10 minutes
+const int UPDATE_INTERVAL_SECS = 10 * 60; // Update every 10 minutes. Configurable.
+const int SensorReadInterval = 15000; // Read sensors every 15 seconds. Configurable.
 
 // Display Settings
 const int I2C_DISPLAY_ADDRESS = 0x3c;
-const int SDA_PIN = D3;
-const int SDC_PIN = D5; 
+const int SDA_PIN = D3; //Hardware dependant.
+const int SDC_PIN = D5; //Hardware dependant.
 
 // TimeClient settings
-const float UTC_OFFSET = 10;
+const float UTC_OFFSET = 10; //Yours. Offset for your time zone.
 
 // Wunderground Settings
 const boolean IS_METRIC = true;
-const String WUNDERGRROUND_API_KEY = ""; //Yours
-const String WUNDERGRROUND_LANGUAGE = "EN";
-const String WUNDERGROUND_COUNTRY = "AU";
-const String WUNDERGROUND_CITY = "Canberra";
+const String WUNDERGRROUND_API_KEY = ""; //Your secret
+const String WUNDERGRROUND_LANGUAGE = "EN";  //Yours.
+const String WUNDERGROUND_COUNTRY = "AU";  //Yours.
+const String WUNDERGROUND_CITY = "Canberra";  //Yours.
 
 //Thingspeak Settings
-const String THINGSPEAK_CHANNEL_ID = ""; //Yours
-const String THINGSPEAK_API_READ_KEY = ""; //Yours
+const String THINGSPEAK_CHANNEL_ID = ""; //Your secret
+const String THINGSPEAK_API_READ_KEY = ""; //Your secret
 
 bool drawFrame1(SSD1306 *display, SSD1306UiState* state, int x, int y);
 bool drawFrame2(SSD1306 *display, SSD1306UiState* state, int x, int y);
@@ -110,25 +110,24 @@ void drawForecast(SSD1306 *display, int x, int y, int dayIndex);
 void updateThingSpeak(String);
 
 // Initialize the oled display for address 0x3c
-// sda-pin=14 and sdc-pin=12
 SSD1306   display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
 SSD1306Ui ui     ( &display );
 DHT dht(DHTPIN, DHTTYPE);
 
-/***************************
- * End Settings
- **************************/
+// Need to create an SFE_BMP180 object, here called "pressure":
+SFE_BMP180 pressure(SDA_PIN, SDC_PIN);
+#define ALTITUDE 569.0 // Yours. Altitude of Lewin St Lyneham in meters
 
 TimeClient timeClient(UTC_OFFSET);
 
 // Set to false, if you prefere imperial/inches, Fahrenheit
-WundergroundClient wunderground(IS_METRIC);
+WundergroundClient wunderground(IS_METRIC); //Yours
 
 ThingspeakClient thingspeak;
 
 // ThingSpeak Settings
 char thingSpeakAddress[] = "api.thingspeak.com";
-String writeAPIKey = ""; //Yours
+String writeAPIKey = ""; //Your secret
 const int updateThingSpeakInterval = 120 * 1000;      // Time interval in milliseconds to update ThingSpeak (number of seconds * 1000 = interval)
 // Variable Setup
 long lastConnectionTime = millis(); //First upload to thingspeeak will be sampling interval after bootup.
@@ -151,23 +150,29 @@ float humidity = NAN;
 int misreads = 0; //counter for consecutive DHT22 misreads 
 float temperatureDHT = NAN; 
 float temperatureDS18b20 = NAN;
+double temperatureBMP,PressureBMP,seaLevelPressure,a;
 
 Ticker ticker;
 
+/***************************
+ * End Settings
+ **************************/
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting...");
-  pinMode(TRIGGER_PIN, INPUT_PULLUP); // Set up WiFi configuration button
+  Serial.println("Starting...");    
+  pinMode(TRIGGER_PIN, INPUT_PULLUP); // Set up WiFi configuration button. Hardware dependant.
   if (WiFi.SSID()==""){
     Serial.println("We haven't got any access point credentials, so get them now");   
-    initialConfig = true;
+    ConfigurationPortalRequired = true;
   }
   else{
     WiFi.mode(WIFI_STA); // Force to station mode because if device was switched off while in access point mode it will start up next time in access point mode.
   }
   dht.begin();
-
-  // locate DS18B20 devices on the bus. Internal pullup resistor works but is much larger than than the external 4.7K specified. Risky!
+  if (pressure.begin()) //Start the pressure sensor
+    Serial.println("BMP180 init success");
+  // locate DS18B20 devices on the bus. 
   sensors.begin();
   sensors.setResolution(12);
   int SensorCount = sensors.getDeviceCount(); 
@@ -252,7 +257,7 @@ void setup() {
     display.display();
     counter++;
      if ((digitalRead(TRIGGER_PIN)) == LOW) {
-       initialConfig = TRUE;
+       ConfigurationPortalRequired = TRUE;
        break;
      }
   }
@@ -283,7 +288,7 @@ void setup() {
   ui.init();
 
   Serial.println("");
-  if (!initialConfig){
+  if (!ConfigurationPortalRequired){
     updateData(&display);
 
     ticker.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
@@ -293,14 +298,14 @@ void setup() {
 
 void loop() {
   // is configuration portal requested?
-  if ((digitalRead(TRIGGER_PIN) == LOW) || (initialConfig)) {
+  if ((digitalRead(TRIGGER_PIN) == LOW) || (ConfigurationPortalRequired)) {
      Serial.println("Configuration portal requested.");
     //Local intialization. Once its business is done, there is no need to keep it around
      display.clear();
      display.setTextAlignment(TEXT_ALIGN_CENTER);
      display.setFont(ArialMT_Plain_10);
      display.drawString(64, 5, "WiFi Configuration mode");
-     display.drawString(64, 20, "Go to http://192.168.1.4");
+     display.drawString(64, 20, "Go to http://192.168.4.1");
      display.drawString(64, 35, "after connecting computer");
      String text = "ESP" + String(ESP.getChipId());
      text = "to " + text + " Wifi Network";
@@ -338,28 +343,104 @@ void loop() {
     // Don't do stuff if you are below your
   // time budget and you want smooth animation.}
   unsigned long TimeInterval = abs( millis() - SensorReadTime);
-  if (TimeInterval>15000 ) { //read sensors every 15 seconds
+  if (TimeInterval>SensorReadInterval ) { 
     SensorReadTime = millis();
     humidity = dht.readHumidity();  
     temperatureDHT = dht.readTemperature(); 
     float temp = sensors.getTempCByIndex(0);
-    if (temp != 85.0) temperatureDS18b20 = temp; //Read 85 at start up. If starting up keep previous temperature 
-    sensors.requestTemperatures(); //initiate ds18B20 sampling which takes about 2 seconds to complete
+    if (temp != 85.0) temperatureDS18b20 = temp; //Read 85 at sensor start up. If starting up keep previous temperature 
+    sensors.requestTemperatures(); //initiate ds18B20 sampling which takes about 750 milliseconds to complete. Data will be 15 secs old when read.
+    // Start a BMP temperature measurement:
+    // If request is successful, the number of ms to wait is returned.
+    // If request is unsuccessful, 0 is returned.
+    int statusBMP = pressure.startTemperature(); //will take 5ms
+    if (statusBMP != 0)
+    {
+      // Wait for the measurement to complete:
+      //Serial.print("startTemperature: ");
+      //Serial.println(statusBMP);
+      delay(statusBMP);
+
+      // Retrieve the completed temperature measurement:
+      // Note that the measurement is stored in the variable temperatureBMP.
+      // Function returns 1 if successful, 0 if failure.
+
+      statusBMP = pressure.getTemperature(temperatureBMP);
+      if (statusBMP != 0){
+        // Print out the measurement:
+        //Serial.print("temperatureBMP: ");
+        //Serial.print(temperatureBMP,2);
+        //Serial.print(" deg C, ");
+      
+        // Start a pressure measurement:
+        // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+        // If request is successful, the number of ms to wait is returned.
+        // If request is unsuccessful, 0 is returned.
+
+        statusBMP = pressure.startPressure(3); //will take 26 ms
+        if (statusBMP != 0){
+          // Wait for the measurement to complete:
+          //Serial.print("startPressure: ");
+          //Serial.print(statusBMP);
+          delay(statusBMP);
+
+          // Retrieve the completed pressure measurement:
+          // Note that the measurement is stored in the variable P.
+          // Note also that the function requires the previous temperature measurement (T).
+          // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
+          // Function returns 1 if successful, 0 if failure.
+
+          statusBMP = pressure.getPressure(PressureBMP, temperatureBMP);
+          if (statusBMP != 0){
+            // Print out the measurement:
+            //Serial.print(" absolute pressure: ");
+            //Serial.print(PressureBMP,2);
+            //Serial.print(" mb, ");
+            //Serial.print(PressureBMP*0.0295333727,2);
+            //Serial.println(" inHg");
+
+            // The pressure sensor returns abolute pressure, which varies with altitude.
+            // To remove the effects of altitude, use the sealevel function and your current altitude.
+            // This number is commonly used in weather reports.
+            // Parameters: PressureBMP = absolute pressure in mb, ALTITUDE = current altitude in m.
+            // Result: seaLevelPressure = sea-level compensated pressure in mb
+
+            seaLevelPressure = pressure.sealevel(PressureBMP,ALTITUDE); 
+            //Serial.print("relative (sea-level) pressure: ");
+            //Serial.print(seaLevelPressure,2);
+            //Serial.print(" mb, ");
+            //Serial.print(seaLevelPressure*0.0295333727,2);
+            //Serial.println(" inHg");
+          }
+          else Serial.println("error retrieving pressure measurement\n");
+        }
+        else Serial.println("error starting pressure measurement\n");
+      }
+      else Serial.println("error retrieving temperature measurement\n");
+    }
+    else Serial.println("error starting temperature measurement\n");
     Serial.print("DHTtemperature = ");
     Serial.print(temperatureDHT);
     Serial.print("  DS18B20temperature = ");
     Serial.print(temp);
+    Serial.print("  BMPtemperature = ");
+    Serial.print(temperatureBMP,1);
+    Serial.print(" relative (sea-level) pressure = ");
+    Serial.print(seaLevelPressure,1);
     Serial.print("  humidity = ");
     Serial.println(humidity); 
     String tt(temperatureDHT, 1);    
     String DS18B20(temperatureDS18b20, 1);   
     localTemperature = tt;    
     DS18B20Temperature = DS18B20;
-    if (( millis()-lastConnectionTime>updateThingSpeakInterval) && (humidity>0) && (temperatureDHT>-100) && (temperatureDS18b20>-100)) { //Checking readings were real i.e. not ISNAN
-      Serial.println("upload temperature/humidity to thingspeak");
+    // Upload data to thingspeak
+    if (( millis()-lastConnectionTime>updateThingSpeakInterval) && (humidity>0) && (temperatureDHT>-100) && (temperatureDS18b20>-100) && (statusBMP != 0)) { //Checking readings were real i.e. not ISNAN
+      Serial.println("upload temperature/humidity/pressure to thingspeak");
       String hh(humidity, 1);
       localHumidity = hh; // upload resolution precision is 1 decimal place
-      updateThingSpeak("field1="+localTemperature+"&field2="+localHumidity+"&field3="+DS18B20Temperature);  
+      String pressureText(seaLevelPressure,1);
+      String BMPtemperature(temperatureBMP,1);
+      updateThingSpeak("field1="+localTemperature+"&field2="+localHumidity+"&field3="+DS18B20Temperature+"&field4="+pressureText+"&field5="+BMPtemperature);  
     }  
     if (humidity>0) {
       misreads = 0;
@@ -370,7 +451,6 @@ void loop() {
         Serial.print("misreads = "); 
         Serial.println(misreads);
     }
-
     if (misreads > 10) localHumidity = "nan";         
   }   
   delay(500); // Make this less to get a sideways scrolling display, longer for a less precise screen update time
@@ -420,7 +500,8 @@ bool drawFrame1(SSD1306 *display, SSD1306UiState* state, int x, int y) {
 bool drawFrame3(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->setFont(ArialMT_Plain_10);
   String text = wunderground.getWeatherText();
-  int space = text.indexOf(" "); //show only first word as second is always cloud..
+  int space = text.indexOf(" "); //Show only first word and rely on picture to communicated following words.
+  //For example if the phrase is scattered cloud the picture will be of clouds so scattered is enough.
   if (space>0) text.remove(space);
   display->drawString(15 + x - text.length()/2, 5 + y, text);
 
@@ -506,8 +587,6 @@ bool drawFrame5(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->setFont(ArialMT_Plain_10);
   display->drawString(64 + x, 0 + y, "Indoor"); //outdoor if read from thingspeak
   display->setFont(ArialMT_Plain_16);
-  //display->drawString(64 + x, 10 + y, thingspeak.getFieldValue(0) + "°C");
-  //display->drawString(64 + x, 30 + y, thingspeak.getFieldValue(1) + "%");
   display->drawString(64 + x, 10 + y, localTemperature + "°C");
   display->drawString(64 + x, 30 + y, localHumidity + "%"); 
   
@@ -525,7 +604,6 @@ void drawForecast(SSD1306 *display, int x, int y, int dayIndex) {
 
   display->setFont(ArialMT_Plain_16);
   display->drawString(x + 20, y + 37, wunderground.getForecastLowTemp(dayIndex) + "/" + wunderground.getForecastHighTemp(dayIndex));
-  //display.drawString(x + 20, y + 51, );
   display->setTextAlignment(TEXT_ALIGN_LEFT);
 }
 

@@ -1,7 +1,7 @@
 # Build
 
-* Stable: [![Build Status](https://travis-ci.org/squix78/esp8266-weather-station.svg?branch=master)](https://travis-ci.org/squix78/esp8266-weather-station)
-* Development: [![Build Status](https://travis-ci.org/squix78/esp8266-weather-station.svg?branch=development)](https://travis-ci.org/squix78/esp8266-weather-station)
+* Stable: [![Build Status](https://travis-ci.org/kentaylor/esp8266-weather-station.svg?branch=master)](https://travis-ci.org/kentaylor/esp8266-weather-station)
+* Development: [![Build Status](https://travis-ci.org/kentaylor/esp8266-weather-station.svg?branch=development)](https://travis-ci.org/kentaylor/esp8266-weather-station)
 
 # esp8266-weather-station
 
@@ -16,7 +16,7 @@ Make sure you use a version of the Arduino IDE which is supported by the ESP8266
 * Install the following libraries with your Arduino Library Manager in Sketch > Include Library > Manage Libraries...
  * ESP8266 Weather Station
  * Json Streaming Parser (by Daniel Eichhorn)
- * ESP8266 Oled Driver for SSD1306 display (by me as well). **Make sure that you use Version 2.0.0 or bigger!**
+ * ESP8266 Oled Driver for SSD1306 display (by Daniel Eichhorn). **Make sure that you use Version 2.0.0 or bigger!**
 * Go to http://wunderground.com, create an account and get an API Key
 * In the Arduino IDE go to File > Examples > ESP8266 Weather Station
  * Enter  the Wunderground API Key
