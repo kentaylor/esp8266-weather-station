@@ -59,14 +59,13 @@ const int TRIGGER_PIN = D0; // Trigger for putting up a configuration portal. Wa
 bool ConfigurationPortalRequired = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
-#define DHTPIN D2     // what digital pin we're connected to. Hardware dependant.
-// GPIO pin which DS18B20 is plugged into. Port 5 on the NodeMCU is pin D1 but this needs an external pullup resistor
-#define ONE_WIRE_BUS D4 // Wemos and NodeMCU has a 10K pullup on D4 which removes need for an additional pullup resistor
+#define DHTPIN D2     // what digital pin we're connected to. Wemos and NodeMCU has a 10K pullup on D2 which removes need for an additional pullup resistor. Hardware dependant.
+#define ONE_WIRE_BUS D4 // GPIO pin which DS18B20 is plugged into. Wemos and NodeMCU has a 10K pullup on D4 which removes need for an additional pullup resistor. Hardware dependant.
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
 
 // Pass our oneWire reference to Dallas Temperature. 
-DallasTemperature sensors(&oneWire);
+DallasTemperature DS18B20sensors(&oneWire);
 
 // arrays to hold device address
 DeviceAddress Thermometer;
@@ -101,13 +100,14 @@ bool drawFrame1(SSD1306 *display, SSD1306UiState* state, int x, int y);
 bool drawFrame2(SSD1306 *display, SSD1306UiState* state, int x, int y);
 bool drawFrame3(SSD1306 *display, SSD1306UiState* state, int x, int y);
 bool drawFrame4(SSD1306 *display, SSD1306UiState* state, int x, int y);
-bool drawFrame5(SSD1306 *display, SSD1306UiState* state, int x, int y);
 
 void updateData(SSD1306 *display);
 void setReadyForWeatherUpdate();
 void drawProgress(SSD1306 *display, int percentage, String label);
 void drawForecast(SSD1306 *display, int x, int y, int dayIndex);
+void readSensors();
 void updateThingSpeak(String);
+
 
 // Initialize the oled display for address 0x3c
 SSD1306   display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
@@ -142,15 +142,21 @@ int numberOfFrames = 3;
 bool readyForWeatherUpdate = false;
 
 String lastUpdate = "--";
-String localTemperature = "";
-String localHumidity = "nan";
-String DS18B20Temperature = "nan";
-unsigned long SensorReadTime = millis()-3000; //Doe the first read 3 seconds after startup
-float humidity = NAN;
-int misreads = 0; //counter for consecutive DHT22 misreads 
-float temperatureDHT = NAN; 
-float temperatureDS18b20 = NAN;
-double temperatureBMP,PressureBMP,seaLevelPressure,a;
+String localTemperature = "n/a";
+String localHumidity = "n/a";
+struct sensor {
+  float value = NAN; //Value from last successful read
+  boolean current = false; // Was last read successful
+  byte invalidReadsCntr = 0; //When there is too many consecutive misreads mark sensor offline
+  boolean online = false; //Assume sensors are not online until proved otherwise. Sensors are read even when offline in case they come back.
+};
+sensor DS18B20Sensor;
+sensor DHThumiditySensor;
+sensor DHTtemperatureSensor;
+sensor BMPtemperatureSensor;
+sensor BMPseaLevelPressureSensor;
+
+unsigned long SensorReadTime = millis()-3000; //Do the first read 3 seconds after startup
 
 Ticker ticker;
 
@@ -173,24 +179,24 @@ void setup() {
   if (pressure.begin()) //Start the pressure sensor
     Serial.println("BMP180 init success");
   // locate DS18B20 devices on the bus. 
-  sensors.begin();
-  sensors.setResolution(12);
-  int SensorCount = sensors.getDeviceCount(); 
-  sensors.requestTemperatures(); // Send the command to get temperatures leave as 12 bit by default
+  DS18B20sensors.begin();
+  DS18B20sensors.setResolution(12);
+  int SensorCount = DS18B20sensors.getDeviceCount(); 
+  DS18B20sensors.requestTemperatures(); // Send the command to get temperatures leave as 12 bit by default
   Serial.print("Found ");
   Serial.print(SensorCount);
-  Serial.println(" temperature sensors.");
+  Serial.println(" DS18B20 temperature sensors.");
   for (int i =0; i<SensorCount; i++)
     {
-    float temp = sensors.getTempCByIndex(i);
+    float temp = DS18B20sensors.getTempCByIndex(i);
     Serial.print("Temperature ");
     Serial.print(i);
     Serial.print(" ");
     Serial.println(temp);
     }
-  sensors.setWaitForConversion(FALSE); //This must be used with caution. See comments on this command in Dallas Temperature.cpp
-  /*  sensors.requestTemperatures() will become a non blocking call but it will take
-   *  about 750ms for the temp sensor to complete the reading. sensors.getTempCByIndex should not be called until the sensor
+  DS18B20sensors.setWaitForConversion(FALSE); //This must be used with caution. See comments on this command in Dallas Temperature.cpp
+  /*  DS18B20sensors.requestTemperatures() will become a non blocking call but it will take
+   *  about 750ms for the temp sensor to complete the reading. DS18B20sensors.getTempCByIndex should not be called until the sensor
    *  has completed taking the reading i.e wait at least 1 second.
    */
    
@@ -206,8 +212,10 @@ void setup() {
   
   //Wait for WiFi to get connected
   int counter = 0;
-   unsigned long startedAt = millis();
-  while (int status = WiFi.status() != WL_CONNECTED) {
+  unsigned long startedAt = millis();
+  int status = WL_DISCONNECTED;
+  while ((status != WL_CONNECTED) && (ConfigurationPortalRequired != TRUE)) {
+    status = WiFi.status();
     Serial.print(status);
     Serial.print(" . ");
     Serial.println(counter); 
@@ -342,116 +350,68 @@ void loop() {
     // You can do some work here
     // Don't do stuff if you are below your
   // time budget and you want smooth animation.}
-  unsigned long TimeInterval = abs( millis() - SensorReadTime);
+  unsigned long TimeInterval = abs( millis() - SensorReadTime); //Will go huge when milis counter rolls over
   if (TimeInterval>SensorReadInterval ) { 
-    SensorReadTime = millis();
-    humidity = dht.readHumidity();  
-    temperatureDHT = dht.readTemperature(); 
-    float temp = sensors.getTempCByIndex(0);
-    if (temp != 85.0) temperatureDS18b20 = temp; //Read 85 at sensor start up. If starting up keep previous temperature 
-    sensors.requestTemperatures(); //initiate ds18B20 sampling which takes about 750 milliseconds to complete. Data will be 15 secs old when read.
-    // Start a BMP temperature measurement:
-    // If request is successful, the number of ms to wait is returned.
-    // If request is unsuccessful, 0 is returned.
-    int statusBMP = pressure.startTemperature(); //will take 5ms
-    if (statusBMP != 0)
-    {
-      // Wait for the measurement to complete:
-      //Serial.print("startTemperature: ");
-      //Serial.println(statusBMP);
-      delay(statusBMP);
-
-      // Retrieve the completed temperature measurement:
-      // Note that the measurement is stored in the variable temperatureBMP.
-      // Function returns 1 if successful, 0 if failure.
-
-      statusBMP = pressure.getTemperature(temperatureBMP);
-      if (statusBMP != 0){
-        // Print out the measurement:
-        //Serial.print("temperatureBMP: ");
-        //Serial.print(temperatureBMP,2);
-        //Serial.print(" deg C, ");
+    readSensors();
+    if ((millis()-lastConnectionTime) > updateThingSpeakInterval) { // Prepare to upload data to thingspeak
+      //Prepare data to be uploaded
+      String uploadDHTtemperature = "NAN";
+      String uploadHumidity = "NAN";
+      String uploadDS18B20 = "NAN";
+      String uploadBMPseaLevelPressure = "NAN";
+      String uploadBMPtemperatureSensor = "NAN";
       
-        // Start a pressure measurement:
-        // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
-        // If request is successful, the number of ms to wait is returned.
-        // If request is unsuccessful, 0 is returned.
-
-        statusBMP = pressure.startPressure(3); //will take 26 ms
-        if (statusBMP != 0){
-          // Wait for the measurement to complete:
-          //Serial.print("startPressure: ");
-          //Serial.print(statusBMP);
-          delay(statusBMP);
-
-          // Retrieve the completed pressure measurement:
-          // Note that the measurement is stored in the variable P.
-          // Note also that the function requires the previous temperature measurement (T).
-          // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
-          // Function returns 1 if successful, 0 if failure.
-
-          statusBMP = pressure.getPressure(PressureBMP, temperatureBMP);
-          if (statusBMP != 0){
-            // Print out the measurement:
-            //Serial.print(" absolute pressure: ");
-            //Serial.print(PressureBMP,2);
-            //Serial.print(" mb, ");
-            //Serial.print(PressureBMP*0.0295333727,2);
-            //Serial.println(" inHg");
-
-            // The pressure sensor returns abolute pressure, which varies with altitude.
-            // To remove the effects of altitude, use the sealevel function and your current altitude.
-            // This number is commonly used in weather reports.
-            // Parameters: PressureBMP = absolute pressure in mb, ALTITUDE = current altitude in m.
-            // Result: seaLevelPressure = sea-level compensated pressure in mb
-
-            seaLevelPressure = pressure.sealevel(PressureBMP,ALTITUDE); 
-            //Serial.print("relative (sea-level) pressure: ");
-            //Serial.print(seaLevelPressure,2);
-            //Serial.print(" mb, ");
-            //Serial.print(seaLevelPressure*0.0295333727,2);
-            //Serial.println(" inHg");
-          }
-          else Serial.println("error retrieving pressure measurement\n");
-        }
-        else Serial.println("error starting pressure measurement\n");
+      if (DHTtemperatureSensor.online == true) {
+        String t1(DHTtemperatureSensor.value, 1); // upload resolution precision is 1 decimal place 
+        uploadDHTtemperature = t1;      
       }
-      else Serial.println("error retrieving temperature measurement\n");
-    }
-    else Serial.println("error starting temperature measurement\n");
-    Serial.print("DHTtemperature = ");
-    Serial.print(temperatureDHT);
-    Serial.print("  DS18B20temperature = ");
-    Serial.print(temp);
-    Serial.print("  BMPtemperature = ");
-    Serial.print(temperatureBMP,1);
-    Serial.print(" relative (sea-level) pressure = ");
-    Serial.print(seaLevelPressure,1);
-    Serial.print("  humidity = ");
-    Serial.println(humidity); 
-    String tt(temperatureDHT, 1);    
-    String DS18B20(temperatureDS18b20, 1);   
-    localTemperature = tt;    
-    DS18B20Temperature = DS18B20;
-    // Upload data to thingspeak
-    if (( millis()-lastConnectionTime>updateThingSpeakInterval) && (humidity>0) && (temperatureDHT>-100) && (temperatureDS18b20>-100) && (statusBMP != 0)) { //Checking readings were real i.e. not ISNAN
+      if (DHThumiditySensor.online == true) {
+        String t2(DHThumiditySensor.value, 1); // upload resolution precision is 1 decimal place
+        uploadHumidity = t2;       
+      }
+      if (DS18B20Sensor.online == true) {
+        String t3(DS18B20Sensor.value, 1); // upload resolution precision is 1 decimal place 
+        uploadDS18B20 = t3;      
+      }
+      if (BMPseaLevelPressureSensor.online == true) {
+        String t4(BMPseaLevelPressureSensor.value, 1); // upload resolution precision is 1 decimal place  
+        uploadBMPseaLevelPressure = t4;     
+      }
+      if (BMPtemperatureSensor.online == true) {
+        String t5(BMPtemperatureSensor.value, 1); // upload resolution precision is 1 decimal place 
+        uploadBMPtemperatureSensor = t5;      
+      }
+      
+      if ((DHTtemperatureSensor.online == false)||(DHTtemperatureSensor.current == true) && (DHThumiditySensor.online == false)||(DHThumiditySensor.current == true)
+      && (DS18B20Sensor.online == false)||(DS18B20Sensor.current == true) && (BMPseaLevelPressureSensor.online == false)||(BMPseaLevelPressureSensor.current == true)
+      && (BMPseaLevelPressureSensor.online == false)||(BMPseaLevelPressureSensor.current == true)) { // Upload data to thingspeak
       Serial.println("upload temperature/humidity/pressure to thingspeak");
-      String hh(humidity, 1);
-      localHumidity = hh; // upload resolution precision is 1 decimal place
-      String pressureText(seaLevelPressure,1);
-      String BMPtemperature(temperatureBMP,1);
-      updateThingSpeak("field1="+localTemperature+"&field2="+localHumidity+"&field3="+DS18B20Temperature+"&field4="+pressureText+"&field5="+BMPtemperature);  
-    }  
-    if (humidity>0) {
-      misreads = 0;
-      localHumidity = String(humidity,0); //display precision is integers only.
+      updateThingSpeak("field1="+uploadDHTtemperature+"&field2="+uploadHumidity+"&field3="+uploadDS18B20+"&field4="+uploadBMPseaLevelPressure+"&field5="+uploadBMPtemperatureSensor);   
+      } 
+    } 
+    // Update humidity on screen
+    if (DHThumiditySensor.current == true) { //DHT sensor misreads sometimes, leave unchanged unless last read was valid.
+      localHumidity = String(DHThumiditySensor.value,0); //display precision is integers only.  
     }
-    else if (misreads <11) {
-        misreads = misreads + 1; 
-        Serial.print("misreads = "); 
-        Serial.println(misreads);
+    else {
+      if (DHThumiditySensor.online == false) localHumidity = "n/a";
     }
-    if (misreads > 10) localHumidity = "nan";         
+    // Update temperature on screen try all temperature sensors in preference order
+    if (DS18B20Sensor.current == true) {
+          String tt(DS18B20Sensor.value, 1);   
+          localTemperature = tt;    
+    }
+    else if (DHTtemperatureSensor.current == true) {
+          String tt(DHTtemperatureSensor.value, 1);   
+          localTemperature = tt;        
+    }
+    else if (BMPtemperatureSensor.current == true) {
+          String tt(BMPtemperatureSensor.value, 1);   
+          localTemperature = tt;        
+    }
+    if ((DS18B20Sensor.online == false) && (DHTtemperatureSensor.online == false) && (BMPtemperatureSensor.online == false)) {
+        localTemperature = "n/a"; // If all temperature sensors are offline mark not available
+    }          
   }   
   delay(500); // Make this less to get a sideways scrolling display, longer for a less precise screen update time
 }
@@ -483,7 +443,7 @@ void drawProgress(SSD1306 *display, int percentage, String label) {
   display->display();
 }
 
-
+// Date and time only
 bool drawFrame1(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->setTextAlignment(TEXT_ALIGN_CENTER);
   display->setFont(ArialMT_Plain_10);
@@ -513,7 +473,7 @@ bool drawFrame3(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->drawString(60 + x + textWidth, 5 + y + 8, "C");
 
    display->setFont(ArialMT_Plain_24);
-  text = DS18B20Temperature + "°";
+  text = localTemperature + "°";
   display->drawString(60 + x, 30 + y, text);
   textWidth = display->getStringWidth(text);
   display->setFont(ArialMT_Plain_16);
@@ -563,33 +523,11 @@ bool drawFrame4(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   display->drawString(60 + x + textWidth, 30 + y + 8, " %");
 }
 
-/*bool drawFrame3(SSD1306 *display, SSD1306UiState* state, int x, int y) {
-  display->setTextAlignment(TEXT_ALIGN_CENTER);
-  display->setFont(ArialMT_Plain_10);
-  display->drawString(32 + x, 0 + y, "Humidity");
-  display->drawString(96 + x, 0 + y, "Pressure");
-  display->drawString(32 + x, 28 + y, "Precipit.");
-
-  display->setFont(ArialMT_Plain_16);
-  display->drawString(32 + x, 10 + y, wunderground.getHumidity());
-  display->drawString(96 + x, 10 + y, wunderground.getPressure());
-  display->drawString(32 + x, 38 + y, wunderground.getPrecipitationToday());
-}*/
 // 3 day forecast
 bool drawFrame2(SSD1306 *display, SSD1306UiState* state, int x, int y) {
   drawForecast(display, x, y, 0);
   drawForecast(display, x + 44, y, 2);
   drawForecast(display, x + 88, y, 4);
-}
-
-bool drawFrame5(SSD1306 *display, SSD1306UiState* state, int x, int y) {
-  display->setTextAlignment(TEXT_ALIGN_CENTER);
-  display->setFont(ArialMT_Plain_10);
-  display->drawString(64 + x, 0 + y, "Indoor"); //outdoor if read from thingspeak
-  display->setFont(ArialMT_Plain_16);
-  display->drawString(64 + x, 10 + y, localTemperature + "°C");
-  display->drawString(64 + x, 30 + y, localHumidity + "%"); 
-  
 }
 
 void drawForecast(SSD1306 *display, int x, int y, int dayIndex) {
@@ -610,6 +548,197 @@ void drawForecast(SSD1306 *display, int x, int y, int dayIndex) {
 void setReadyForWeatherUpdate() {
   Serial.println("Setting readyForUpdate to true");
   readyForWeatherUpdate = true;
+}
+
+void readSensors(){
+    SensorReadTime = millis();
+    float humidity = dht.readHumidity();     
+    if (humidity>0) { //Will be nan if no sensor response or read errot. Will get occasional read errors
+      DHThumiditySensor.value  = humidity; 
+      DHThumiditySensor.current = true;
+      DHThumiditySensor.invalidReadsCntr = 0;
+      DHThumiditySensor.online = true;
+    }
+    else {
+      DHThumiditySensor.current = false;
+      DHThumiditySensor.invalidReadsCntr = DHThumiditySensor.invalidReadsCntr + 1;
+      if (DHThumiditySensor.invalidReadsCntr > 3) DHThumiditySensor.online = false;
+    }
+    float temperatureDHT = dht.readTemperature(); 
+    if (temperatureDHT>0) { //Will be nan if no sensor response or read errot. Will get occasional read errors
+      DHTtemperatureSensor.value  = temperatureDHT; 
+      DHTtemperatureSensor.current = true;
+      DHTtemperatureSensor.invalidReadsCntr = 0;
+      DHTtemperatureSensor.online = true;
+    }
+    else {
+      DHTtemperatureSensor.current = false;
+      DHTtemperatureSensor.invalidReadsCntr = DHTtemperatureSensor.invalidReadsCntr + 1;
+      if (DHTtemperatureSensor.invalidReadsCntr > 3) DHTtemperatureSensor.online = false;
+    }
+    float temp = DS18B20sensors.getTempCByIndex(0);
+    if ((temp != 85.0) && (temp > -100)) { //Read 85 at sensor start up and -127 if no sensor response
+      DS18B20Sensor.value  = temp; 
+      DS18B20Sensor.current = true;
+      DS18B20Sensor.invalidReadsCntr = 0;
+      DS18B20Sensor.online = true;
+    }
+    else {
+      DS18B20Sensor.current = false;
+      DS18B20Sensor.invalidReadsCntr = DS18B20Sensor.invalidReadsCntr + 1;
+      if (DS18B20Sensor.invalidReadsCntr > 3) DS18B20Sensor.online = false;
+    }
+    
+    DS18B20sensors.requestTemperatures(); //initiate ds18B20 sampling which takes about 750 milliseconds to complete. Data will be 15 secs old when read.
+    // Start a BMP temperature measurement:
+    // If request is successful, the number of ms to wait is returned.
+    // If request is unsuccessful, 0 is returned.
+    int statusBMP = pressure.startTemperature(); //will take 5ms
+    if (statusBMP != 0)
+    {
+      // Wait for the measurement to complete:
+      //Serial.print("startTemperature: ");
+      //Serial.println(statusBMP);
+      delay(statusBMP);
+
+      // Retrieve the completed temperature measurement:
+      // Note that the measurement is stored in the variable temperatureBMP.
+      // Function returns 1 if successful, 0 if failure.
+      double temperatureBMP;
+      statusBMP = pressure.getTemperature(temperatureBMP);
+      if (statusBMP != 0){
+          BMPtemperatureSensor.value  = temperatureBMP; 
+          BMPtemperatureSensor.current = true;
+          BMPtemperatureSensor.invalidReadsCntr = 0;
+          BMPtemperatureSensor.online = true;
+        // Print out the measurement:
+        //Serial.print("temperatureBMP: ");
+        //Serial.print(temperatureBMP,2);
+        //Serial.print(" deg C, ");
+      
+        // Start a pressure measurement:
+        // The parameter is the oversampling setting, from 0 to 3 (highest res, longest wait).
+        // If request is successful, the number of ms to wait is returned.
+        // If request is unsuccessful, 0 is returned.
+
+        statusBMP = pressure.startPressure(3); //will take 26 ms
+        if (statusBMP != 0){
+          // Wait for the measurement to complete:
+          //Serial.print("startPressure: ");
+          //Serial.print(statusBMP);
+          delay(statusBMP);
+
+          // Retrieve the completed pressure measurement:
+          // Note that the measurement is stored in the variable P.
+          // Note also that the function requires the previous temperature measurement (T).
+          // (If temperature is stable, you can do one temperature measurement for a number of pressure measurements.)
+          // Function returns 1 if successful, 0 if failure.
+          double PressureBMP;
+          statusBMP = pressure.getPressure(PressureBMP, temperatureBMP);
+          if (statusBMP != 0){
+            // Print out the measurement:
+            //Serial.print(" absolute pressure: ");
+            //Serial.print(PressureBMP,2);
+            //Serial.print(" mb, ");
+            //Serial.print(PressureBMP*0.0295333727,2);
+            //Serial.println(" inHg");
+
+            // The pressure sensor returns abolute pressure, which varies with altitude.
+            // To remove the effects of altitude, use the sealevel function and your current altitude.
+            // This number is commonly used in weather reports.
+            // Parameters: PressureBMP = absolute pressure in mb, ALTITUDE = current altitude in m.
+            // Result: seaLevelPressure = sea-level compensated pressure in mb
+
+            double seaLevelPressure = pressure.sealevel(PressureBMP,ALTITUDE); 
+            BMPseaLevelPressureSensor.value  = seaLevelPressure; 
+            BMPseaLevelPressureSensor.current = true;
+            BMPseaLevelPressureSensor.invalidReadsCntr = 0;
+            BMPseaLevelPressureSensor.online = true;
+            //Serial.print("relative (sea-level) pressure: ");
+            //Serial.print(seaLevelPressure,2);
+            //Serial.print(" mb, ");
+            //Serial.print(seaLevelPressure*0.0295333727,2);
+            //Serial.println(" inHg");
+          }
+          else {
+            Serial.println("error retrieving pressure measurement");
+            BMPseaLevelPressureSensor.current = false;
+            BMPseaLevelPressureSensor.invalidReadsCntr =  BMPseaLevelPressureSensor.invalidReadsCntr + 1;
+            if ( BMPseaLevelPressureSensor.invalidReadsCntr > 3)  BMPseaLevelPressureSensor.online = false;
+            BMPtemperatureSensor.current = false;
+          }
+        }
+        else {
+          Serial.println("error starting pressure measurement");
+          BMPseaLevelPressureSensor.current = false;
+          BMPseaLevelPressureSensor.invalidReadsCntr =  BMPseaLevelPressureSensor.invalidReadsCntr + 1;
+          if ( BMPseaLevelPressureSensor.invalidReadsCntr > 3)  BMPseaLevelPressureSensor.online = false;
+          BMPtemperatureSensor.current = false;
+        }
+      }
+      else {
+        Serial.println("error retrieving BMP temperature measurement");
+        BMPseaLevelPressureSensor.current = false;
+        BMPseaLevelPressureSensor.invalidReadsCntr =  BMPseaLevelPressureSensor.invalidReadsCntr + 1;
+        if ( BMPseaLevelPressureSensor.invalidReadsCntr > 3)  BMPseaLevelPressureSensor.online = false;
+        BMPtemperatureSensor.current = false;
+        BMPtemperatureSensor.invalidReadsCntr = BMPtemperatureSensor.invalidReadsCntr + 1;
+        if (BMPtemperatureSensor.invalidReadsCntr > 3) BMPtemperatureSensor.online = false;
+      }
+    }
+    else {
+      Serial.println("error starting BMP temperature measurement");
+      BMPseaLevelPressureSensor.current = false;
+      BMPseaLevelPressureSensor.invalidReadsCntr =  BMPseaLevelPressureSensor.invalidReadsCntr + 1;
+      if ( BMPseaLevelPressureSensor.invalidReadsCntr > 3)  BMPseaLevelPressureSensor.online = false;
+      BMPtemperatureSensor.current = false;
+      BMPtemperatureSensor.invalidReadsCntr = BMPtemperatureSensor.invalidReadsCntr + 1;
+      if (BMPtemperatureSensor.invalidReadsCntr > 3) BMPtemperatureSensor.online = false;
+    }
+    Serial.print("  DHThumiditySensor = ");
+    Serial.print(DHThumiditySensor.value);
+    Serial.print("  DHThumiditySensor.current = ");
+    Serial.print(DHThumiditySensor.current);
+    Serial.print("  DHThumiditySensor.invalidReadsCntr = ");
+    Serial.print(DHThumiditySensor.invalidReadsCntr);
+    Serial.print("  DHThumiditySensor.online = ");
+    Serial.println(DHThumiditySensor.online);
+
+    Serial.print("  DHTtemperatureSensor = ");
+    Serial.print(DHTtemperatureSensor.value);
+    Serial.print("  DHTtemperatureSensor.current = ");
+    Serial.print(DHTtemperatureSensor.current);
+    Serial.print("  DHTtemperatureSensor.invalidReadsCntr = ");
+    Serial.print(DHTtemperatureSensor.invalidReadsCntr);
+    Serial.print("  DHTtemperatureSensor.online = ");
+    Serial.println(DHTtemperatureSensor.online);
+    
+    Serial.print("  DS18B20temperature = ");
+    Serial.print(temp);
+    Serial.print("  DS18B20temperaturecurrent = ");
+    Serial.print(DS18B20Sensor.current);
+    Serial.print("  DS18B20Sensor.invalidReadsCntr = ");
+    Serial.print(DS18B20Sensor.invalidReadsCntr);
+    Serial.print("  DS18B20Sensor.online = ");
+    Serial.println(DS18B20Sensor.online);
+
+    Serial.print("  BMPtemperatureSensor = ");
+    Serial.print(BMPtemperatureSensor.value);
+    Serial.print("  BMPtemperatureSensor.current = ");
+    Serial.print(BMPtemperatureSensor.current);
+    Serial.print("  BMPtemperatureSensor.invalidReadsCntr = ");
+    Serial.print(BMPtemperatureSensor.invalidReadsCntr);
+    Serial.print("  BMPtemperatureSensor.online = ");
+    Serial.println(BMPtemperatureSensor.online);
+
+    Serial.print("  BMPseaLevelPressureSensor = ");
+    Serial.print(BMPseaLevelPressureSensor.value);
+    Serial.print("  BMPseaLevelPressureSensor.current = ");
+    Serial.print(BMPseaLevelPressureSensor.current);
+    Serial.print("  BMPseaLevelPressureSensor.invalidReadsCntr = ");
+    Serial.print(BMPseaLevelPressureSensor.invalidReadsCntr);
+    Serial.print("  BMPseaLevelPressureSensor.online = ");
+    Serial.println(BMPseaLevelPressureSensor.online);
 }
 
 void updateThingSpeak(String tsData) {
