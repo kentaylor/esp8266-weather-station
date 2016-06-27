@@ -55,7 +55,7 @@ according to how your wiring is configured. Parameters labelled as "configurable
  * Flash button is convenient to use but if it is pressed it will stuff up the serial port device driver 
  * until the computer is rebooted on windows machines.
  */
-const int TRIGGER_PIN = D0; // Trigger for putting up a configuration portal. Wake up pin for deep sleep mode NodeMCU and WeMos. Hardware dependant.
+const int TRIGGER_PIN = D6; // Trigger for putting up a configuration portal. Wake up pin for deep sleep mode NodeMCU and WeMos. Hardware dependant.
 bool ConfigurationPortalRequired = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
@@ -95,6 +95,8 @@ const String WUNDERGROUND_CITY = "Canberra";  //Yours.
 //Thingspeak Settings
 const String THINGSPEAK_CHANNEL_ID = ""; //Your secret
 const String THINGSPEAK_API_READ_KEY = ""; //Your secret
+
+void ConfigSavedScreen(); //Screen after WiFi config has been updated.
 
 bool drawFrame1(SSD1306 *display, SSD1306UiState* state, int x, int y);
 bool drawFrame2(SSD1306 *display, SSD1306UiState* state, int x, int y);
@@ -264,10 +266,15 @@ void setup() {
     display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
     display.display();
     counter++;
-     if ((digitalRead(TRIGGER_PIN)) == LOW) {
-       ConfigurationPortalRequired = TRUE;
-       break;
+    unsigned long ButtonStart = millis();
+    while ((digitalRead(TRIGGER_PIN)) == LOW) {
+       unsigned long TimeInterval = abs( millis() - ButtonStart); //Will go huge when milis counter rolls over
+       if (TimeInterval > 150) {
+         ConfigurationPortalRequired = TRUE;
+         break;
+       }
      }
+  if (ConfigurationPortalRequired == TRUE) break;
   }
   Serial.print("After waiting ");
   float waited = (millis()- startedAt); 
@@ -306,27 +313,34 @@ void setup() {
 
 void loop() {
   // is configuration portal requested?
-  if ((digitalRead(TRIGGER_PIN) == LOW) || (ConfigurationPortalRequired)) {
+  unsigned long ButtonStart = millis();
+  while ((digitalRead(TRIGGER_PIN)) == LOW) {
+     unsigned long TimeInterval = abs( millis() - ButtonStart); //Will go huge when milis counter rolls over
+     if (TimeInterval > 150) {
+       ConfigurationPortalRequired = TRUE;
+       break;
+     }
+  }
+  if (ConfigurationPortalRequired) {
      Serial.println("Configuration portal requested.");
-    //Local intialization. Once its business is done, there is no need to keep it around
      display.clear();
      display.setTextAlignment(TEXT_ALIGN_CENTER);
      display.setFont(ArialMT_Plain_10);
-     display.drawString(64, 5, "WiFi Configuration mode");
-     display.drawString(64, 20, "Go to http://192.168.4.1");
-     display.drawString(64, 35, "after connecting computer");
+     display.drawString(64, 5, "To configure WiFi. Go to");
+     display.drawString(64, 20, "http://192.168.4.1 after");
+     display.drawString(64, 35, "connecting computer to");
      String text = "ESP" + String(ESP.getChipId());
-     text = "to " + text + " Wifi Network";
-     display.drawString(64, 50, text);
-     
+     text = text + " Wifi Network";
+     display.drawString(64, 50, text);    
      display.display();
+     //Local intialization. Once its business is done, there is no need to keep it around
      WiFiManager wifiManager;
 
     //sets timeout in seconds until configuration portal gets turned off.
     //If not specified device will remain in configuration mode until
     //switched off via webserver or device is restarted.
     //wifiManager.setConfigPortalTimeout(600);
-
+    wifiManager.setSaveConfigCallback(* ConfigSavedScreen);
     //it starts an access point 
     //and goes into a blocking loop awaiting configuration
     if (!wifiManager.startConfigPortal()) {
@@ -353,7 +367,7 @@ void loop() {
   unsigned long TimeInterval = abs( millis() - SensorReadTime); //Will go huge when milis counter rolls over
   if (TimeInterval>SensorReadInterval ) { 
     readSensors();
-    if ((millis()-lastConnectionTime) > updateThingSpeakInterval) { // Prepare to upload data to thingspeak
+    if ((millis()-lastConnectionTime) > updateThingSpeakInterval) { // Prepare data to upload to thingspeak
       //Prepare data to be uploaded
       String uploadDHTtemperature = "NAN";
       String uploadHumidity = "NAN";
@@ -396,7 +410,7 @@ void loop() {
     else {
       if (DHThumiditySensor.online == false) localHumidity = "n/a";
     }
-    // Update temperature on screen try all temperature sensors in preference order
+    // Update temperature on screen. Try all temperature sensors in preference order
     if (DS18B20Sensor.current == true) {
           String tt(DS18B20Sensor.value, 1);   
           localTemperature = tt;    
@@ -414,6 +428,20 @@ void loop() {
     }          
   }   
   delay(500); // Make this less to get a sideways scrolling display, longer for a less precise screen update time
+}
+
+void ConfigSavedScreen(){
+   Serial.println("Configuration updated.");
+   display.clear();
+   display.setTextAlignment(TEXT_ALIGN_CENTER);
+   display.setFont(ArialMT_Plain_10);
+   display.drawString(64, 5,  "WiFi configured. Reboot");
+   display.drawString(64, 20, "or select exit at");
+   display.drawString(64, 35, "http://192.168.4.1 on");
+   String text = "ESP" + String(ESP.getChipId());
+   text = text + " Wifi Network";
+   display.drawString(64, 50, text);    
+   display.display();
 }
 
 void updateData(SSD1306 *display) {
