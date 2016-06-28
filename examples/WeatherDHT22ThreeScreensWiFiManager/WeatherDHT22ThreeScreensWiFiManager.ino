@@ -74,7 +74,7 @@ WiFiClient client;
 
 
 // Setup
-const int UPDATE_INTERVAL_SECS = 10 * 60; // Update every 10 minutes. Configurable.
+const int UPDATE_INTERVAL_SECS = 10 * 60; // Get data from weather underground every 10 minutes. Configurable.
 const int SensorReadInterval = 15000; // Read sensors every 15 seconds. Configurable.
 
 // Display Settings
@@ -107,6 +107,7 @@ void updateData(SSD1306 *display);
 void setReadyForWeatherUpdate();
 void drawProgress(SSD1306 *display, int percentage, String label);
 void drawForecast(SSD1306 *display, int x, int y, int dayIndex);
+boolean buttonTestAndDelay(int);
 void readSensors();
 void updateThingSpeak(String);
 
@@ -216,12 +217,11 @@ void setup() {
   int counter = 0;
   unsigned long startedAt = millis();
   int status = WL_DISCONNECTED;
-  while ((status != WL_CONNECTED) && (ConfigurationPortalRequired != TRUE)) {
+  while ((status != WL_CONNECTED) && (ConfigurationPortalRequired != true)) {
     status = WiFi.status();
     Serial.print(status);
     Serial.print(" . ");
     Serial.println(counter); 
-    delay(500);
     display.clear();
     switch (status)
    {
@@ -266,15 +266,7 @@ void setup() {
     display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
     display.display();
     counter++;
-    unsigned long ButtonStart = millis();
-    while ((digitalRead(TRIGGER_PIN)) == LOW) {
-       unsigned long TimeInterval = abs( millis() - ButtonStart); //Will go huge when milis counter rolls over
-       if (TimeInterval > 150) {
-         ConfigurationPortalRequired = TRUE;
-         break;
-       }
-     }
-  if (ConfigurationPortalRequired == TRUE) break;
+    if (buttonTestAndDelay(500) == true) ConfigurationPortalRequired = true; 
   }
   Serial.print("After waiting ");
   float waited = (millis()- startedAt); 
@@ -303,24 +295,12 @@ void setup() {
   ui.init();
 
   Serial.println("");
-  if (!ConfigurationPortalRequired){
-    updateData(&display);
-
-    ticker.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
-    //display.flipScreenVertically();
-  }
+  if (!ConfigurationPortalRequired) updateData(&display);  //Jump past display update if ConfigurationPortalRequired
+  ticker.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
+  //display.flipScreenVertically();
 }
 
 void loop() {
-  // is configuration portal requested?
-  unsigned long ButtonStart = millis();
-  while ((digitalRead(TRIGGER_PIN)) == LOW) {
-     unsigned long TimeInterval = abs( millis() - ButtonStart); //Will go huge when milis counter rolls over
-     if (TimeInterval > 150) {
-       ConfigurationPortalRequired = TRUE;
-       break;
-     }
-  }
   if (ConfigurationPortalRequired) {
      Serial.println("Configuration portal requested.");
      display.clear();
@@ -426,8 +406,24 @@ void loop() {
     if ((DS18B20Sensor.online == false) && (DHTtemperatureSensor.online == false) && (BMPtemperatureSensor.online == false)) {
         localTemperature = "n/a"; // If all temperature sensors are offline mark not available
     }          
-  }   
-  delay(500); // Make this less to get a sideways scrolling display, longer for a less precise screen update time
+  }
+  if (buttonTestAndDelay(500) == true) ConfigurationPortalRequired = true; // Make this delay less to get a sideways scrolling display, longer for a less precise screen update time  
+}
+
+boolean buttonTestAndDelay(int delayPeriod){ //Use this function instead of delay() as it allows a button press to be detected during the delay
+    // wait for a while and check if s configuration portal has been requested?
+  unsigned long delayStart = millis();
+  while ((abs (millis() - delayStart))<= delayPeriod){ 
+    unsigned long ButtonStart = millis();
+    while ((digitalRead(TRIGGER_PIN)) == LOW) {
+       unsigned long TimeInterval = abs( millis() - ButtonStart); //abs makes test immune to counter roll over even though it will never happen in this case
+       if (TimeInterval > 100) {
+         return(true);
+       }
+    }
+   delay(50); 
+  }
+  return(false);
 }
 
 void ConfigSavedScreen(){
