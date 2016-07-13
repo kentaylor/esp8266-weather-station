@@ -33,7 +33,8 @@ according to how your wiring is configured. Parameters labelled as "configurable
 */
 #include "DHT.h" //https://github.com/adafruit/DHT-sensor-library 
 #include <ESP8266WiFi.h>
-#include <Ticker.h>
+#include "OneButton.h"
+#include "Ticker.h"
 #include <JsonListener.h>
 #include "SSD1306.h"
 #include "SSD1306Ui.h"
@@ -57,6 +58,7 @@ according to how your wiring is configured. Parameters labelled as "configurable
  */
 const int TRIGGER_PIN = D6; // Trigger for putting up a configuration portal. Wake up pin for deep sleep mode NodeMCU and WeMos. Hardware dependant.
 bool ConfigurationPortalRequired = false;
+bool ConfigurationPortalQuestionRequired = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
 #define DHTPIN D2     // what digital pin we're connected to. Wemos and NodeMCU has a 10K pullup on D2 which removes need for an additional pullup resistor. Hardware dependant.
@@ -107,8 +109,10 @@ void updateData(SSD1306 *display);
 void setReadyForWeatherUpdate();
 void drawProgress(SSD1306 *display, int percentage, String label);
 void drawForecast(SSD1306 *display, int x, int y, int dayIndex);
-boolean buttonTestAndDelay(int);
 void readSensors();
+void checkButton();
+void ConfigurationPortalQuestion(SSD1306 *display);
+void ConfigurationPortalQuestionFlag();
 void updateThingSpeak(String);
 
 
@@ -119,7 +123,7 @@ DHT dht(DHTPIN, DHTTYPE);
 
 // Need to create an SFE_BMP180 object, here called "pressure":
 SFE_BMP180 pressure(SDA_PIN, SDC_PIN);
-#define ALTITUDE 569.0 // Yours. Altitude of Lewin St Lyneham in meters
+#define ALTITUDE 587.0 // Yours. Altitude of belconnen in meters
 
 TimeClient timeClient(UTC_OFFSET);
 
@@ -161,8 +165,10 @@ sensor BMPseaLevelPressureSensor;
 
 unsigned long SensorReadTime = millis()-3000; //Do the first read 3 seconds after startup
 
-Ticker ticker;
-
+// Setup a new OneButton on pin TRIGGER_PIN. Hardware dependant.
+OneButton button(TRIGGER_PIN, true);
+Ticker buttonTicker;
+Ticker wundergroundTicker;
 /***************************
  * End Settings
  **************************/
@@ -212,6 +218,11 @@ void setup() {
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setContrast(255);
+
+  // link the ConfigurationPortal function to be called on a click event.   
+  button.attachClick(ConfigurationPortalQuestionFlag);
+  //Start timer to detect click events
+  buttonTicker.attach(0.05, checkButton);
   
   //Wait for WiFi to get connected
   int counter = 0;
@@ -232,7 +243,7 @@ void setup() {
         display.drawString(64, 10, "Device WiFi Failed");
         break;
       }
-      case WL_NO_SSID_AVAIL: { // 1
+      case WL_DISCONNECTED: {  // 6
         display.drawString(64, 10, "Connecting to WiFi");
         String text = WiFi.SSID();
         if (counter>60) {
@@ -244,7 +255,7 @@ void setup() {
         }
         break;
         }
-      case WL_DISCONNECTED: {  // 6
+      case WL_NO_SSID_AVAIL: { // 1
         display.drawString(64, 10, "Connecting to WiFi");
         String text = WiFi.SSID();
         text = text + " not visible";
@@ -266,13 +277,16 @@ void setup() {
     display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
     display.display();
     counter++;
-    if (buttonTestAndDelay(500) == true) ConfigurationPortalRequired = true; 
+    delay(500); 
   }
   Serial.print("After waiting ");
   float waited = (millis()- startedAt); 
   Serial.print(waited/1000);
   Serial.print(" secs in setup() connection result is ");
   Serial.println(WiFi.status());
+    // Set the ConfigurationPortal function to be called on a LongPress event.   
+  //This callback will fire every tick so to avoid simultaneous instances don't do much there 
+  button.attachDuringLongPress(ConfigurationPortalQuestionFlag); 
   ui.setTargetFPS(30);
 
   ui.setActiveSymbole(activeSymbole);
@@ -296,11 +310,14 @@ void setup() {
 
   Serial.println("");
   if (!ConfigurationPortalRequired) updateData(&display);  //Jump past display update if ConfigurationPortalRequired
-  ticker.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
+  wundergroundTicker.attach(UPDATE_INTERVAL_SECS, setReadyForWeatherUpdate);
   //display.flipScreenVertically();
 }
 
 void loop() {
+    if (ConfigurationPortalQuestionRequired) {
+     ConfigurationPortalQuestion(&display);
+  }
   if (ConfigurationPortalRequired) {
      Serial.println("Configuration portal requested.");
      display.clear();
@@ -329,6 +346,8 @@ void loop() {
       //if you get here you have connected to the WiFi
       Serial.println("connected...yeey :)");
     }
+    ConfigurationPortalRequired = false;
+    ConfigurationPortalQuestionRequired = false;
     ESP.reset(); // This is a bit crude. For some unknown reason webserver can only be started once per boot up 
     // so resetting the device allows to go back into config mode again when it reboots.
     delay(5000);
@@ -407,23 +426,7 @@ void loop() {
         localTemperature = "n/a"; // If all temperature sensors are offline mark not available
     }          
   }
-  if (buttonTestAndDelay(500) == true) ConfigurationPortalRequired = true; // Make this delay less to get a sideways scrolling display, longer for a less precise screen update time  
-}
-
-boolean buttonTestAndDelay(int delayPeriod){ //Use this function instead of delay() as it allows a button press to be detected during the delay
-    // wait for a while and check if s configuration portal has been requested?
-  unsigned long delayStart = millis();
-  while ((abs (millis() - delayStart))<= delayPeriod){ 
-    unsigned long ButtonStart = millis();
-    while ((digitalRead(TRIGGER_PIN)) == LOW) {
-       unsigned long TimeInterval = abs( millis() - ButtonStart); //abs makes test immune to counter roll over even though it will never happen in this case
-       if (TimeInterval > 100) {
-         return(true);
-       }
-    }
-   delay(50); 
-  }
-  return(false);
+  delay(500); // Make this delay less to get a sideways scrolling display, longer for a less precise screen update time  
 }
 
 void ConfigSavedScreen(){
@@ -798,4 +801,22 @@ void updateThingSpeak(String tsData) {
     }
 }
 
-
+void checkButton() { //Called on ticker event. Update button state. 
+  button.tick();
+}
+void ConfigurationPortalQuestionFlag() { //Called on every tick during a long button press
+ ConfigurationPortalQuestionRequired = true;
+}
+void ConfigurationPortalQuestion(SSD1306 *display) {
+  delay(0); 
+  Serial.println("ConfigQuestion");
+  int counter=0;
+  while ((button.isLongPressed()) && (counter<=20)) {  
+    if (counter % 2 == 0) drawProgress(display, (counter*5+1), "Configure WiFi     "); 
+    else drawProgress(display, (counter*5+1), "Configure WiFi ???");
+    counter++;
+    delay(500); 
+  }
+  if (button.isLongPressed()) ConfigurationPortalRequired = true;
+  else ConfigurationPortalQuestionRequired = false;
+}
