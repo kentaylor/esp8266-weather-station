@@ -136,9 +136,10 @@ ThingspeakClient thingspeak;
 char thingSpeakAddress[] = "api.thingspeak.com";
 String writeAPIKey = ""; //Your secret
 const int updateThingSpeakInterval = 120 * 1000;      // Time interval in milliseconds to update ThingSpeak (number of seconds * 1000 = interval)
-// Variable Setup
-long lastConnectionTime = millis(); //First upload to thingspeeak will be sampling interval after bootup.
-int failedCounter = 0;
+#define MAXIMUM_REPORTING_INTERVAL 15*60*1000 //Maximum interval between Thingspeak uploads. (number of seconds * 1000 = interval)
+#define MINIMUM_REPORTING_INTERVAL 2*60*1000  //Miniimum interval between Thingspeak uploads. (number of seconds * 1000 = interval)
+// Temperature difference to trigger logging new data to the server
+#define TEMPERATURE_TRIGGER 0.25
 
 // this array keeps function pointers to all frames
 // frames are the single views that slide from right to left
@@ -363,10 +364,45 @@ void loop() {
     // You can do some work here
     // Don't do stuff if you are below your
   // time budget and you want smooth animation.}
+  static float lastTemperatureUploaded = 1000;
+  float temperatureDiff = 0; // Used to decide if temperature has changed enough to upload data to Thingspeak
+  bool validTemperatureSensor = true;
   unsigned long TimeInterval = abs( millis() - SensorReadTime); //Will go huge when milis counter rolls over
   if (TimeInterval>SensorReadInterval ) { 
     readSensors();
-    if ((millis()-lastConnectionTime) > updateThingSpeakInterval) { // Prepare data to upload to thingspeak
+    // Update humidity on screen
+    if (DHThumiditySensor.current == true) { //DHT sensor misreads sometimes, leave unchanged unless last read was valid.
+      localHumidity = String(DHThumiditySensor.value,0); //display precision is integers only.  
+    }
+    else {
+      if (DHThumiditySensor.online == false) localHumidity = "n/a";
+    }
+    // Try all temperature sensors in preference order for temperature for upload test and temperature on screen. 
+    float PreferredLocalTemperature = 2000;
+    if (DS18B20Sensor.current == true) {
+      PreferredLocalTemperature = DS18B20Sensor.value;  
+    }
+    else if (DHTtemperatureSensor.current == true) {
+      PreferredLocalTemperature = DHTtemperatureSensor.value;       
+    }
+    else if (BMPtemperatureSensor.current == true) {
+      PreferredLocalTemperature = BMPtemperatureSensor.value;      
+    }
+    if ((DS18B20Sensor.online == false) && (DHTtemperatureSensor.online == false) && (BMPtemperatureSensor.online == false)) {
+      validTemperatureSensor = false;
+      localTemperature = "n/a"; // If all temperature sensors are offline mark not available
+    }
+    else{
+      temperatureDiff = PreferredLocalTemperature - lastTemperatureUploaded;
+      if (temperatureDiff < 0) temperatureDiff = - temperatureDiff;
+      Serial.print("PreferredLocalTemperature = ");
+      String tt(PreferredLocalTemperature, 1);
+      localTemperature = tt;
+    }
+
+    static long lastUploadAttempt = millis(); //First upload to thingspeeak will be sampling interval after bootup.
+    if (((abs((millis()-lastUploadAttempt)) > MINIMUM_REPORTING_INTERVAL) && ((temperatureDiff > TEMPERATURE_TRIGGER)|| (!validTemperatureSensor))) || (abs((millis()-lastUploadAttempt)) > MAXIMUM_REPORTING_INTERVAL)) { // Prepare data to upload to thingspeak
+      
       //Prepare data to be uploaded
       String uploadDHTtemperature = "NAN";
       String uploadHumidity = "NAN";
@@ -393,38 +429,16 @@ void loop() {
       if (BMPtemperatureSensor.online == true) {
         String t5(BMPtemperatureSensor.value, 1); // upload resolution precision is 1 decimal place 
         uploadBMPtemperatureSensor = t5;      
-      }
-      
-      if ((DHTtemperatureSensor.online == false)||(DHTtemperatureSensor.current == true) && (DHThumiditySensor.online == false)||(DHThumiditySensor.current == true)
-      && (DS18B20Sensor.online == false)||(DS18B20Sensor.current == true) && (BMPseaLevelPressureSensor.online == false)||(BMPseaLevelPressureSensor.current == true)
+      }     
+      if ((abs((millis()-lastUploadAttempt)) > MINIMUM_REPORTING_INTERVAL) && (DHTtemperatureSensor.online == false)||(DHTtemperatureSensor.current == true) && (DHThumiditySensor.online == false)||(DHThumiditySensor.current == true)
+      && (DS18B20Sensor.online == false)||(DS18B20Sensor.current == true) && (BMPseaLevelPressureSensor.online == false)||(BMPseaLevelPressureSensor.current == true) //If data is good and more than MINIMUM_REPORTING_INTERVAL upload.
       && (BMPseaLevelPressureSensor.online == false)||(BMPseaLevelPressureSensor.current == true)) { // Upload data to thingspeak
-      Serial.println("upload temperature/humidity/pressure to thingspeak");
-      updateThingSpeak("field1="+uploadDHTtemperature+"&field2="+uploadHumidity+"&field3="+uploadDS18B20+"&field4="+uploadBMPseaLevelPressure+"&field5="+uploadBMPtemperatureSensor);   
+        Serial.println("upload temperature/humidity/pressure to thingspeak");
+        lastUploadAttempt = millis(); // Only try once per minimum upload interval even if upload fails
+        updateThingSpeak("field1="+uploadDHTtemperature+"&field2="+uploadHumidity+"&field3="+uploadDS18B20+"&field4="+uploadBMPseaLevelPressure+"&field5="+uploadBMPtemperatureSensor);  
+        if (validTemperatureSensor) lastTemperatureUploaded =  PreferredLocalTemperature;
       } 
-    } 
-    // Update humidity on screen
-    if (DHThumiditySensor.current == true) { //DHT sensor misreads sometimes, leave unchanged unless last read was valid.
-      localHumidity = String(DHThumiditySensor.value,0); //display precision is integers only.  
-    }
-    else {
-      if (DHThumiditySensor.online == false) localHumidity = "n/a";
-    }
-    // Update temperature on screen. Try all temperature sensors in preference order
-    if (DS18B20Sensor.current == true) {
-          String tt(DS18B20Sensor.value, 1);   
-          localTemperature = tt;    
-    }
-    else if (DHTtemperatureSensor.current == true) {
-          String tt(DHTtemperatureSensor.value, 1);   
-          localTemperature = tt;        
-    }
-    else if (BMPtemperatureSensor.current == true) {
-          String tt(BMPtemperatureSensor.value, 1);   
-          localTemperature = tt;        
-    }
-    if ((DS18B20Sensor.online == false) && (DHTtemperatureSensor.online == false) && (BMPtemperatureSensor.online == false)) {
-        localTemperature = "n/a"; // If all temperature sensors are offline mark not available
-    }          
+    }           
   }
   delay(500); // Make this delay less to get a sideways scrolling display, longer for a less precise screen update time  
 }
@@ -769,7 +783,7 @@ void readSensors(){
 }
 
 void updateThingSpeak(String tsData) {
-  
+  static int failedCounter = 0;
     if (client.connect(thingSpeakAddress, 80)) {    
            
         client.print("POST /update HTTP/1.1\n");
@@ -780,9 +794,7 @@ void updateThingSpeak(String tsData) {
         client.print("Content-Length: ");
         client.print(tsData.length());
         client.print("\n\n");
-
         client.print(tsData);
-        lastConnectionTime = millis();
 
         if (client.connected()) {
             Serial.println("Connecting to ThingSpeak...");
@@ -797,7 +809,6 @@ void updateThingSpeak(String tsData) {
         failedCounter++;
         Serial.println("Connection to ThingSpeak Failed ("+String(failedCounter, DEC)+")");   
         Serial.println();
-        lastConnectionTime = millis(); //Don't try again until next scheduled upload
     }
 }
 
