@@ -36,14 +36,14 @@ void TimeClient::updateTime() {
     Serial.println("connection failed");
     return;
   }
-  
+
   // This will send the request to the server
   client.print(String("GET / HTTP/1.1\r\n") +
-               String("Host: www.google.com\r\n") + 
+               String("Host: www.google.com\r\n") +
                String("Connection: close\r\n\r\n"));
   int repeatCounter = 0;
   while(!client.available() && repeatCounter < 10) {
-    delay(1000); 
+    delay(1000);
     Serial.println(".");
     repeatCounter++;
   }
@@ -52,11 +52,12 @@ void TimeClient::updateTime() {
 
   int size = 0;
   client.setNoDelay(false);
-  while(client.connected()) {
+  unsigned long timer = millis();
+  while((client.connected())&& ((abs(millis() - timer))<60000)) { // Don't wait more than 1 minute for a response
     while((size = client.available()) > 0) {
       line = client.readStringUntil('\n');
       line.toUpperCase();
-      // example: 
+      // example:
       // date: Thu, 19 Nov 2015 20:25:40 GMT
       if (line.startsWith("DATE: ")) {
         Serial.println(line.substring(23, 25) + ":" + line.substring(26, 28) + ":" +line.substring(29, 31));

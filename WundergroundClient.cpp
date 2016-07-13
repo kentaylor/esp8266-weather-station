@@ -68,7 +68,8 @@ void WundergroundClient::doUpdate(String url) {
 
   int size = 0;
   client.setNoDelay(false);
-  while(client.connected()) {
+  unsigned long timer = millis();
+  while((client.connected())&& ((abs(millis() - timer))<60000)) { // Don't wait more than 1 minute for a response
     while((size = client.available()) > 0) {
       c = client.read();
       if (c == '{' || c == '[') {
