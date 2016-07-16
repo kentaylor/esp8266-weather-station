@@ -59,6 +59,7 @@ according to how your wiring is configured. Parameters labelled as "configurable
 const int TRIGGER_PIN = D6; // Trigger for putting up a configuration portal. Wake up pin for deep sleep mode NodeMCU and WeMos. Hardware dependant.
 bool ConfigurationPortalRequired = false;
 bool ConfigurationPortalQuestionRequired = false;
+bool NexrScreen = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
 #define DHTPIN D2     // what digital pin we're connected to. Wemos and NodeMCU has a 10K pullup on D2 which removes need for an additional pullup resistor. Hardware dependant.
@@ -113,6 +114,8 @@ void readSensors();
 void checkButton();
 void ConfigurationPortalQuestion(SSD1306 *display);
 void ConfigurationPortalQuestionFlag();
+void NextScreenFlag(); 
+void ConfigurationPortalFlag();
 void updateThingSpeak(String);
 
 
@@ -220,8 +223,9 @@ void setup() {
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.setContrast(255);
 
-  // link the ConfigurationPortal function to be called on a click event.   
-  button.attachClick(ConfigurationPortalQuestionFlag);
+  // link the ConfigurationPortal functions to button events.   
+  button.attachClick(ConfigurationPortalFlag); //a button press starts a configuration portal wile connecting to WiFi
+  button.attachDuringLongPress(ConfigurationPortalQuestionFlag); //long press always starts a configuration portal
   //Start timer to detect click events
   buttonTicker.attach(0.05, checkButton);
   
@@ -229,19 +233,23 @@ void setup() {
   int counter = 0;
   unsigned long startedAt = millis();
   int status = WL_DISCONNECTED;
-  while ((status != WL_CONNECTED) && (ConfigurationPortalRequired != true)) {
+  while ((status != WL_CONNECTED) && (ConfigurationPortalRequired == false) && (ConfigurationPortalQuestionRequired == false) && (counter < 600)) { //Move on after 5 minutes if connection fails.
     status = WiFi.status();
     Serial.print(status);
     Serial.print(" . ");
     Serial.println(counter); 
     display.clear();
     switch (status)
-   {
+     {
       // WL_NO_SHIELD 255
        //WL_SCAN_COMPLETED 2
        //WL_CONNECTION_LOST 5
       case WL_IDLE_STATUS: { //0
         display.drawString(64, 10, "Device WiFi Failed");
+        String text = WiFi.SSID();
+        text = text + " not visible";
+        display.drawString(64, 40,text);
+        display.drawString(64, 54, "Push button to configure WiFi");
         break;
       }
       case WL_DISCONNECTED: {  // 6
@@ -253,7 +261,7 @@ void setup() {
         }
         else {
           display.drawString(64, 45,text);
-        }
+          }
         break;
         }
       case WL_NO_SSID_AVAIL: { // 1
@@ -267,8 +275,8 @@ void setup() {
       case WL_CONNECTED: break; // 3
       case WL_CONNECT_FAILED: { //4
         display.drawString(64, 10, "Connecting to WiFi");
-        display.drawString(64, 40, "Connect failed. Push button ");
-        display.drawString(64, 54, "to configure WiFi");
+        display.drawString(64, 40, "Connect failed.");
+        display.drawString(64, 54, "Try restarting");
         break;
       }
       default: display.drawString(64, 10, "Connecting to WiFi");
@@ -276,7 +284,7 @@ void setup() {
     display.drawXbm(46, 30, 8, 8, counter % 3 == 0 ? activeSymbole : inactiveSymbole);
     display.drawXbm(60, 30, 8, 8, counter % 3 == 1 ? activeSymbole : inactiveSymbole);
     display.drawXbm(74, 30, 8, 8, counter % 3 == 2 ? activeSymbole : inactiveSymbole);
-    display.display();
+    display.display(); 
     counter++;
     delay(500); 
   }
@@ -287,9 +295,8 @@ void setup() {
   Serial.println(WiFi.status());
     // Set the ConfigurationPortal function to be called on a LongPress event.   
   //This callback will fire every tick so to avoid simultaneous instances don't do much there 
-  button.attachDuringLongPress(ConfigurationPortalQuestionFlag); 
+  button.attachClick(NextScreenFlag); //Button click no longer will start a configuration portal.
   ui.setTargetFPS(30);
-
   ui.setActiveSymbole(activeSymbole);
   ui.setInactiveSymbole(inactiveSymbole);
   // You can change this to
@@ -394,8 +401,7 @@ void loop() {
     }
     else{
       temperatureDiff = PreferredLocalTemperature - lastTemperatureUploaded;
-      if (temperatureDiff < 0) temperatureDiff = - temperatureDiff;
-      Serial.print("PreferredLocalTemperature = ");
+      if (temperatureDiff < 0) temperatureDiff = - temperatureDiff; //Make absolute so that upload occurs on increasing or decreasing temperatures
       String tt(PreferredLocalTemperature, 1);
       localTemperature = tt;
     }
@@ -818,11 +824,17 @@ void checkButton() { //Called on ticker event. Update button state.
 void ConfigurationPortalQuestionFlag() { //Called on every tick during a long button press
  ConfigurationPortalQuestionRequired = true;
 }
+void ConfigurationPortalFlag() { //Called on every tick during a long button press
+ ConfigurationPortalRequired = true;
+}
+void NextScreenFlag() { //Called on button press
+ NexrScreen = true;  //Doesn't do anything at the moment. Functionality to be added.
+}
 void ConfigurationPortalQuestion(SSD1306 *display) {
   delay(0); 
   Serial.println("ConfigQuestion");
   int counter=0;
-  while ((button.isLongPressed()) && (counter<=20)) {  
+  while ((button.isLongPressed()) && (counter<=10)) {  
     if (counter % 2 == 0) drawProgress(display, (counter*5+1), "Configure WiFi     "); 
     else drawProgress(display, (counter*5+1), "Configure WiFi ???");
     counter++;
