@@ -8,49 +8,43 @@ ThingspeakClient::ThingspeakClient() {
 void ThingspeakClient::getLastChannelItem(String channelId, String readApiKey) {
   JsonStreamingParser parser;
   parser.setListener(this);
-  WiFiClient client;
+  HTTPClient http;
 
   // http://api.thingspeak.com/channels/CHANNEL_ID/feeds.json?results=2&api_key=API_KEY
-  const char host[] = "api.thingspeak.com";
-  String url = "/channels/" + channelId +"/feeds.json?results=1&api_key=" + readApiKey;
-
-  const int httpPort = 80;
-  if (!client.connect(host, httpPort)) {
-    Serial.println("connection failed");
-    return;
-  }
-
-
-  Serial.print("Requesting URL: ");
-  Serial.println(url);
-
-  // This will send the request to the server
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
-               "Host: " + host + "\r\n" +
-               "Connection: close\r\n\r\n");
-  while(!client.available()) {
-    Serial.println(".");
-    delay(1000);
-  }
-
-  int pos = 0;
-  boolean isBody = false;
-  char c;
-
-  int size = 0;
-  client.setNoDelay(false);
-  unsigned long timer = millis();
-  while((client.connected())&& ((abs(millis() - timer))<60000)) { // Don't wait more than 1 minute for a response
-    while((size = client.available()) > 0) {
-      c = client.read();
-      if (c == '{' || c == '[') {
-        isBody = true;
+  String url = "http://api.thingspeak.com/channels/" + channelId +"/feeds.json?results=1&api_key=" + readApiKey;
+  // Based on Arduino core BasicHttpClient.ino example
+  // https://github.com/esp8266/Arduino/blob/1588b45a8a15e4d3f1b42f052fc41590e9bec0bb/libraries/ESP8266HTTPClient/examples/BasicHttpClient/BasicHttpClient.ino
+  // configure http client and url
+  http.begin(url); //HTTP
+  // start connection and send HTTP header
+  int httpCode = http.GET();
+  // httpCode will be negative on error
+  if(httpCode > 0) {
+	  // HTTP header has been send and Server response header has been handled
+	  USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+	  // file found at server
+	  if(httpCode == HTTP_CODE_OK) {
+		  String payload = http.getString();
+		  USE_SERIAL.println(payload);
+		  http.end();
+		  int i = 0;
+		  char c;
+		  boolean isBody = false;
+		  int length = payload.length();
+		  while ((i)<length) {
+		    c = payload.charAt(i);
+		    if (c == '{' || c == '[') {
+			  isBody = true;
+		    }
+		    if (isBody) {
+			  parser.parse(c);
+		    }
+		  i=i+1;
+		  }
+      } else {
+          USE_SERIAL.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
       }
-      if (isBody) {
-        parser.parse(c);
-      }
-    }
-  }
+   }
 }
 
 void ThingspeakClient::whitespace(char c) {

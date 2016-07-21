@@ -30,49 +30,42 @@ TimeClient::TimeClient(float utcOffset) {
 }
 
 void TimeClient::updateTime() {
-  WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect("www.google.com", httpPort)) {
-    Serial.println("connection failed");
-    return;
-  }
+  HTTPClient http;
 
-  // This will send the request to the server
-  client.print(String("GET / HTTP/1.1\r\n") +
-               String("Host: www.google.com\r\n") +
-               String("Connection: close\r\n\r\n"));
-  int repeatCounter = 0;
-  while(!client.available() && repeatCounter < 10) {
-    delay(1000);
-    Serial.println(".");
-    repeatCounter++;
-  }
-
-  String line;
-
-  int size = 0;
-  client.setNoDelay(false);
-  unsigned long timer = millis();
-  while((client.connected())&& ((abs(millis() - timer))<60000)) { // Don't wait more than 1 minute for a response
-    while((size = client.available()) > 0) {
-      line = client.readStringUntil('\n');
-      line.toUpperCase();
-      // example:
-      // date: Thu, 19 Nov 2015 20:25:40 GMT
-      if (line.startsWith("DATE: ")) {
-        Serial.println(line.substring(23, 25) + ":" + line.substring(26, 28) + ":" +line.substring(29, 31));
-        int parsedHours = line.substring(23, 25).toInt();
-        int parsedMinutes = line.substring(26, 28).toInt();
-        int parsedSeconds = line.substring(29, 31).toInt();
-        Serial.println(String(parsedHours) + ":" + String(parsedMinutes) + ":" + String(parsedSeconds));
-
-        localEpoc = (parsedHours * 60 * 60 + parsedMinutes * 60 + parsedSeconds);
-        Serial.println(localEpoc);
-        localMillisAtUpdate = millis();
+  String url = "http://www.google.com/";
+  const char * headerkeys[] = {"Date"} ;
+  size_t headerkeyssize = sizeof(headerkeys)/sizeof(char*);
+  // Based on Arduino core BasicHttpClient.ino example
+  // https://github.com/esp8266/Arduino/blob/1588b45a8a15e4d3f1b42f052fc41590e9bec0bb/libraries/ESP8266HTTPClient/examples/BasicHttpClient/BasicHttpClient.ino
+  // configure http client and url
+  http.begin(url); //HTTP
+  http.collectHeaders(headerkeys,headerkeyssize);
+  // start connection and send HTTP header
+  int httpCode = http.GET();
+  // httpCode will be negative on error
+  if(httpCode > 0) {
+	  // HTTP header has been send and Server response header has been handled
+	  USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+	  // file found at server
+	  if ((httpCode == HTTP_CODE_OK)|| (httpCode == HTTP_CODE_FOUND)) {
+		String payload = http.header("Date");
+		USE_SERIAL.println(payload);
+		http.end();
+        payload.toUpperCase();
+        // example:
+      	// date: Thu, 19 Nov 2015 20:25:40 GMT
+      	if (payload!=NULL) {
+          Serial.println(payload.substring(17, 19) + ":" + payload.substring(20, 22) + ":" +payload.substring(23, 25));
+          int parsedHours = payload.substring(17, 19).toInt();
+          int parsedMinutes = payload.substring(20, 22).toInt();
+          int parsedSeconds = payload.substring(23, 25).toInt();
+          Serial.println(String(parsedHours) + ":" + String(parsedMinutes) + ":" + String(parsedSeconds));
+          localEpoc = (parsedHours * 60 * 60 + parsedMinutes * 60 + parsedSeconds);
+          Serial.println(localEpoc);
+          localMillisAtUpdate = millis();
+        }
       }
-    }
   }
-
 }
 
 String TimeClient::getHours() {

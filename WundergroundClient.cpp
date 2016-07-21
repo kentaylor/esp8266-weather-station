@@ -24,7 +24,8 @@ See more at http://blog.squix.ch
 */
 
 #include <ESP8266WiFi.h>
-#include <WiFiClient.h>
+#include <ESP8266HTTPClient.h>
+#define USE_SERIAL Serial
 #include "WundergroundClient.h"
 
 WundergroundClient::WundergroundClient(boolean _isMetric) {
@@ -33,53 +34,75 @@ WundergroundClient::WundergroundClient(boolean _isMetric) {
 
 void WundergroundClient::updateConditions(String apiKey, String language, String country, String city) {
   isForecast = false;
-  doUpdate("/api/" + apiKey + "/conditions/lang:" + language + "/q/" + country + "/" + city + ".json");
+  doUpdate("http://api.wunderground.com/api/" + apiKey + "/conditions/lang:" + language + "/q/" + country + "/" + city + ".json");
 }
 
 void WundergroundClient::updateForecast(String apiKey, String language, String country, String city) {
   isForecast = true;
-  doUpdate("/api/" + apiKey + "/forecast10day/lang:" + language + "/q/" + country + "/" + city + ".json");
+  doUpdate("http://api.wunderground.com/api/" + apiKey + "/forecast10day/lang:" + language + "/q/" + country + "/" + city + ".json");
 }
 
 void WundergroundClient::doUpdate(String url) {
   JsonStreamingParser parser;
   parser.setListener(this);
-  WiFiClient client;
-  const int httpPort = 80;
-  if (!client.connect("api.wunderground.com", httpPort)) {
-    Serial.println("connection failed");
-    return;
-  }
+  HTTPClient http;
+//Based on streaming example at https://github.com/esp8266/Arduino/blob/1588b45a8a15e4d3f1b42f052fc41590e9bec0bb/libraries/ESP8266HTTPClient/examples/StreamHttpClient/StreamHttpClient.ino
+//Main difference is that characters are read one at time then parsed.
+//Must use stream as Wunderground documents can be too big to hold in memory.
+	Serial.print("Requesting URL: ");
+	Serial.println(url);
+	http.begin(url); //HTTP
+	int httpCode = http.GET();
+	if(httpCode > 0) {
+		// HTTP header has been send and Server response header has been handled
+		USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
 
-  Serial.print("Requesting URL: ");
-  Serial.println(url);
+		// file found at server
+		if(httpCode == HTTP_CODE_OK) {
 
-  // This will send the request to the server
-  client.print(String("GET ") + url + " HTTP/1.1\r\n" +
-               "Host: api.wunderground.com\r\n" +
-               "Connection: close\r\n\r\n");
-  while(!client.available()) {
-    delay(1000);
-  }
+			// get length of document (is -1 when Server sends no Content-Length header)
+			int len = http.getSize();
 
-  int pos = 0;
-  boolean isBody = false;
-  char c;
+			// create buffer for read
+			char buff;
+			char *buffer = &buff;
 
-  int size = 0;
-  client.setNoDelay(false);
-  unsigned long timer = millis();
-  while((client.connected())&& ((abs(millis() - timer))<60000)) { // Don't wait more than 1 minute for a response
-    while((size = client.available()) > 0) {
-      c = client.read();
-      if (c == '{' || c == '[') {
-        isBody = true;
-      }
-      if (isBody) {
-        parser.parse(c);
-      }
-    }
-  }
+			// get tcp stream
+			WiFiClient * stream = http.getStreamPtr();
+            bool isBody = false;
+			// read all data from server
+			while(http.connected() && (len > 0 || len == -1)) {
+				// get available data size
+				size_t size = stream->available();
+
+				if(size) {
+					// read 1 byte
+					int c = stream->readBytes(buffer, 1);//((size > sizeof(buffer)) ? sizeof(buffer) : size));
+
+					// write it to Serial
+					//USE_SERIAL.print(buff);
+					if (buff == '{' || buff == '[') {
+					  isBody = true;
+		   		    }
+					if (isBody) {
+					  parser.parse(buff);
+  		            }
+					if(len > 0) {
+						len -= c;
+					}
+				}
+				delay(1);
+			}
+
+			USE_SERIAL.println();
+			USE_SERIAL.print("[HTTP] connection closed or file end.\n");
+
+		}
+	} else {
+		USE_SERIAL.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+	}
+
+	http.end();
 }
 
 void WundergroundClient::whitespace(char c) {

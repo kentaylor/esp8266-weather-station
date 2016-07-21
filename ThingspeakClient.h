@@ -27,9 +27,9 @@ See more at http://blog.squix.ch
 
 #include <JsonListener.h>
 #include <JsonStreamingParser.h>
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
+#include <ESP8266HTTPClient.h>
 
+#define USE_SERIAL Serial
 #define MAX_FORECAST_PERIODS 7
 
 class ThingspeakClient: public JsonListener {
@@ -40,10 +40,10 @@ class ThingspeakClient: public JsonListener {
     String createdAt;
     boolean isHeader = true;
     String currentKey = "";
-    
+
   public:
     ThingspeakClient();
-    
+
     void getLastChannelItem(String channelId, String readApiKey);
 
     String getFieldLabel(int index);
@@ -51,9 +51,9 @@ class ThingspeakClient: public JsonListener {
     String getFieldValue(int index);
 
     String getCreatedAt();
-    
+
     virtual void whitespace(char c);
-  
+
     virtual void startDocument();
 
     virtual void key(String key);
