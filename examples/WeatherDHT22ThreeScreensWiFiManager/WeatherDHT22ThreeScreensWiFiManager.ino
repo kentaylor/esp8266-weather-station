@@ -62,7 +62,7 @@ bool ConfigurationPortalQuestionRequired = false;
 bool NexrScreen = false;
 
 #define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
-#define DHTPIN D2     // what digital pin we're connected to. Wemos and NodeMCU has a 10K pullup on D2 which removes need for an additional pullup resistor. Hardware dependant.
+#define DHTPIN D2     // what digital pin we're connected to. No pullup required for DHT22. NodeMCU has a 10K pullup on D2. Hardware dependant.
 #define ONE_WIRE_BUS D4 // GPIO pin which DS18B20 is plugged into. Wemos and NodeMCU has a 10K pullup on D4 which removes need for an additional pullup resistor. Hardware dependant.
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
@@ -90,7 +90,7 @@ const float UTC_OFFSET = 10; //Yours. Offset for your time zone.
 
 // Wunderground Settings
 const boolean IS_METRIC = true;
-const String WUNDERGRROUND_API_KEY = ""; //Your secret
+const String WUNDERGRROUND_API_KEY = ""; //Your secret  
 const String WUNDERGRROUND_LANGUAGE = "EN";  //Yours.
 const String WUNDERGROUND_COUNTRY = "AU";  //Yours.
 const String WUNDERGROUND_CITY = "Canberra";  //Yours.
@@ -225,7 +225,7 @@ void setup() {
 
   // link the ConfigurationPortal functions to button events.   
   button.attachClick(ConfigurationPortalFlag); //a button press starts a configuration portal wile connecting to WiFi
-  button.attachDuringLongPress(ConfigurationPortalQuestionFlag); //long press always starts a configuration portal
+  button.attachDuringLongPress(ConfigurationPortalFlag); //long press starts a configuration portal wile connecting to WiFi
   //Start timer to detect click events
   buttonTicker.attach(0.05, checkButton);
   
@@ -234,7 +234,7 @@ void setup() {
   unsigned long startedAt = millis();
   int status = WL_DISCONNECTED;
   while ((status != WL_CONNECTED) && (ConfigurationPortalRequired == false) && (ConfigurationPortalQuestionRequired == false) && (counter < 600)) { //Move on after 5 minutes if connection fails.
-    status = WiFi.status();
+    status = WiFi.status(); 
     Serial.print(status);
     Serial.print(" . ");
     Serial.println(counter); 
@@ -296,6 +296,7 @@ void setup() {
     // Set the ConfigurationPortal function to be called on a LongPress event.   
   //This callback will fire every tick so to avoid simultaneous instances don't do much there 
   button.attachClick(NextScreenFlag); //Button click no longer will start a configuration portal.
+  button.attachDuringLongPress(ConfigurationPortalQuestionFlag); //long press starts a configuration portal after a delay
   ui.setTargetFPS(30);
   ui.setActiveSymbole(activeSymbole);
   ui.setInactiveSymbole(inactiveSymbole);
@@ -323,17 +324,14 @@ void setup() {
 }
 
 void loop() {
-    if (ConfigurationPortalQuestionRequired) {
-     ConfigurationPortalQuestion(&display);
-  }
   if (ConfigurationPortalRequired) {
      Serial.println("Configuration portal requested.");
      display.clear();
      display.setTextAlignment(TEXT_ALIGN_CENTER);
      display.setFont(ArialMT_Plain_10);
      display.drawString(64, 5, "To configure WiFi. Go to");
-     display.drawString(64, 20, "http://192.168.4.1 after");
-     display.drawString(64, 35, "connecting computer to");
+     display.drawString(64, 20, "wifi.urremote.com");
+     display.drawString(64, 35, "Connect to");
      String text = "ESP" + String(ESP.getChipId());
      text = text + " Wifi Network";
      display.drawString(64, 50, text);    
@@ -360,8 +358,10 @@ void loop() {
     // so resetting the device allows to go back into config mode again when it reboots.
     delay(5000);
   }
-  
-  if (readyForWeatherUpdate && ui.getUiState().frameState == FIXED) {
+  if (ConfigurationPortalQuestionRequired) {
+     ConfigurationPortalQuestion(&display);
+  }
+  if (readyForWeatherUpdate && ui.getUiState().frameState == FIXED && WiFi.status()==WL_CONNECTED) {
     updateData(&display);
     Serial.println("update display");   
   }
@@ -594,8 +594,9 @@ void drawForecast(SSD1306 *display, int x, int y, int dayIndex) {
 }
 
 void setReadyForWeatherUpdate() {
-  Serial.println("Setting readyForUpdate to true");
+  Serial.println("Setting readyForWeatherUpdate to true");
   readyForWeatherUpdate = true;
+  //When true device will update when it 
 }
 
 void readSensors(){
